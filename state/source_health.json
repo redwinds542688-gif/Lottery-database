@@ -82,5 +82,47 @@
       "disabled": false,
       "last_success_date": null
     }
+  },
+  "fantasy5": {
+    "加州彩券官網": {
+      "first_fail_date": null,
+      "disabled": false,
+      "last_success_date": "2026-08-25"
+    },
+    "lotteryusa.com": {
+      "first_fail_date": null,
+      "disabled": false,
+      "last_success_date": "2026-08-25"
+    },
+    "lottery.net": {
+      "first_fail_date": "2026-08-25",
+      "disabled": false,
+      "last_success_date": null
+    },
+    "lotto-8.com": {
+      "first_fail_date": null,
+      "disabled": false,
+      "last_success_date": "2026-08-25"
+    },
+    "twlottery.in": {
+      "first_fail_date": "2026-08-25",
+      "disabled": false,
+      "last_success_date": null
+    },
+    "pilio.idv.tw": {
+      "first_fail_date": "2026-08-25",
+      "disabled": false,
+      "last_success_date": null
+    },
+    "lotteryextreme.com": {
+      "first_fail_date": null,
+      "disabled": false,
+      "last_success_date": "2026-08-25"
+    },
+    "Google新聞搜尋": {
+      "first_fail_date": "2026-08-25",
+      "disabled": false,
+      "last_success_date": null
+    }
   }
 }

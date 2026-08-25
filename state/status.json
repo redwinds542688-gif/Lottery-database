@@ -27,5 +27,19 @@
       40
     ],
     "special": 6
+  },
+  "fantasy5": {
+    "fetching": false,
+    "updated_at": "2026-08-25 19:39:33",
+    "date": "2026-08-25",
+    "weekday": "二",
+    "numbers": [
+      9,
+      11,
+      14,
+      16,
+      34
+    ],
+    "special": null
   }
 }
