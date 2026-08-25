@@ -1,0 +1,47 @@
+name: 爬蟲 - 大樂透
+
+on:
+  schedule:
+    # 台灣時間每天 21:10（UTC+8），換算 UTC 為 13:10
+    - cron: "10 13 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: lottery-scraper-lotto649
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scraper
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_BRANCH: main
+          STATE_DIR: state
+        run: python lottery_scraper.py --game lotto649
+
+      - name: 提交狀態檔案（lottery.db / status.json / source_health.json）
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/
+          git diff --cached --quiet || git commit -m "更新爬蟲狀態 (大樂透) [skip ci]"
+          git pull --rebase origin main
+          git push
