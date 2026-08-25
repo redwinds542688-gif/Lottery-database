@@ -799,9 +799,9 @@ def source_fantasy5_lotteryextreme():
     m = re.search(r"(\d{1,2}/\d{1,2}/\d{4}).{0,40}?((?:\d{1,2}\D+){4}\d{1,2})", text)
     if not m:
         raise ValueError("解析失敗，網站結構可能已改版")
-    draw_date = m.group(1)return "", draw_date, normalize_numbers(numbers), None
-
-
+    draw_date = m.group(1)
+    numbers = re.findall(r"\d{1,2}", m.group(2))[:5]
+    return "", draw_date, normalize_numbers(numbers), None
 SOURCES_FANTASY5 = [
     ("加州彩券官網", source_fantasy5_official),
     ("lotteryusa.com", source_fantasy5_lotteryusa),
