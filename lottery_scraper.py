@@ -534,6 +534,7 @@ def save_confirmed(conn, game, period, draw_date, numbers, special, sources):
 # ---------------------------------------------------------------------------
 # 今彩539 三個來源
 # ---------------------------------------------------------------------------def source_539_official():
+def source_539_official():
     """台彩官方 API
     2026-08-25 修正：原本的網址 .../DailyCashResult 已經失效（實測回應 404），
     正確路徑要帶 month 參數，欄位也不是 dailyCashResult/drawNumberAppear，
