@@ -12,5 +12,20 @@
       35
     ],
     "special": null
+  },
+  "lotto649": {
+    "fetching": false,
+    "updated_at": "2026-08-25 19:34:51",
+    "date": "2026-08-25",
+    "weekday": "二",
+    "numbers": [
+      12,
+      24,
+      26,
+      32,
+      35,
+      40
+    ],
+    "special": 6
   }
 }

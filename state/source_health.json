@@ -40,5 +40,47 @@
       "disabled": false,
       "last_success_date": null
     }
+  },
+  "lotto649": {
+    "台彩官方API": {
+      "first_fail_date": null,
+      "disabled": false,
+      "last_success_date": "2026-08-25"
+    },
+    "i539.tw": {
+      "first_fail_date": "2026-08-25",
+      "disabled": false,
+      "last_success_date": null
+    },
+    "奧索樂透網": {
+      "first_fail_date": "2026-08-25",
+      "disabled": false,
+      "last_success_date": null
+    },
+    "pilio.idv.tw": {
+      "first_fail_date": "2026-08-25",
+      "disabled": false,
+      "last_success_date": null
+    },
+    "lotto-8.com": {
+      "first_fail_date": "2026-08-25",
+      "disabled": false,
+      "last_success_date": null
+    },
+    "arclink.com.tw": {
+      "first_fail_date": "2026-08-25",
+      "disabled": false,
+      "last_success_date": null
+    },
+    "9800.com.tw": {
+      "first_fail_date": null,
+      "disabled": false,
+      "last_success_date": "2026-08-25"
+    },
+    "Google新聞搜尋": {
+      "first_fail_date": "2026-08-25",
+      "disabled": false,
+      "last_success_date": null
+    }
   }
 }
