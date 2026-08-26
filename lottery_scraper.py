@@ -267,7 +267,8 @@ def fetch_twlottery_latest(url, num_count, has_special):
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
     text = soup.get_text("\n", strip=True)
-    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]    date_re = re.compile(r"^(\d{4})\.(\d{2})\.(\d{2})\s*\([一二三四五六日]\)$")
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    date_re = re.compile(r"^(\d{4})\.(\d{2})\.(\d{2})\s*\([一二三四五六日]\)$")
 
     def is_period_token(s):
         return s == "期" or "｜" in s or (s.isdigit() and len(s) >= 3)
