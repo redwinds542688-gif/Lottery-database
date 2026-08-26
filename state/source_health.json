@@ -124,5 +124,47 @@
       "disabled": false,
       "last_success_date": null
     }
+  },
+  "marksix": {
+    "HKJC官方": {
+      "first_fail_date": "2026-08-26",
+      "disabled": false,
+      "last_success_date": null
+    },
+    "lottery.hk": {
+      "first_fail_date": null,
+      "disabled": false,
+      "last_success_date": "2026-08-26"
+    },
+    "marksixlotterynumbers.hk": {
+      "first_fail_date": "2026-08-26",
+      "disabled": false,
+      "last_success_date": null
+    },
+    "pilio.idv.tw": {
+      "first_fail_date": "2026-08-26",
+      "disabled": false,
+      "last_success_date": null
+    },
+    "lotto-8.com": {
+      "first_fail_date": "2026-08-26",
+      "disabled": false,
+      "last_success_date": null
+    },
+    "twlottery.in": {
+      "first_fail_date": "2026-08-26",
+      "disabled": false,
+      "last_success_date": null
+    },
+    "9800.com.tw": {
+      "first_fail_date": null,
+      "disabled": false,
+      "last_success_date": "2026-08-26"
+    },
+    "Google新聞搜尋": {
+      "first_fail_date": "2026-08-26",
+      "disabled": false,
+      "last_success_date": null
+    }
   }
 }
