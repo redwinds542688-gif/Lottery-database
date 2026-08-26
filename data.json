@@ -1,6 +1,14 @@
 {
   "今彩539": [
     {
+      "period": "115000207",
+      "draw_date": "2026-08-26T00:00:00",
+      "numbers": "13 19 23 35 38",
+      "special_number": "",
+      "agreeing_sources": "台彩官方API",
+      "checked_at": "2026-08-26 17:44:04"
+    },
+    {
       "period": "115000206",
       "draw_date": "2026-08-25T00:00:00",
       "numbers": "8 21 23 30 35",
