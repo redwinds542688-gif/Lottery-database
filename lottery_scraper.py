@@ -267,8 +267,7 @@ def fetch_twlottery_latest(url, num_count, has_special):
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
     text = soup.get_text("\n", strip=True)
-    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
-    date_re = re.compile(r"^(\d{4})\.(\d{2})\.(\d{2})\s*\([一二三四五六日]\)$")
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]    date_re = re.compile(r"^(\d{4})\.(\d{2})\.(\d{2})\s*\([一二三四五六日]\)$")
 
     def is_period_token(s):
         return s == "期" or "｜" in s or (s.isdigit() and len(s) >= 3)
@@ -533,12 +532,11 @@ def save_confirmed(conn, game, period, draw_date, numbers, special, sources):
 
 # ---------------------------------------------------------------------------
 # 今彩539 三個來源
-# ---------------------------------------------------------------------------def source_539_official():
+# ---------------------------------------------------------------------------
 def source_539_official():
     """台彩官方 API
     2026-08-25 修正：原本的網址 .../DailyCashResult 已經失效（實測回應 404），
-    正確路徑要帶 month 參數，欄位也不是 dailyCashResult/drawNumberAppear，
-    已對照官方目前實際格式（content.daily539Res / drawNumberSize）修正。"""
+    正確路徑要帶 month 參數，欄位也不是 dailyCashResult/drawNumberAppear，    已對照官方目前實際格式（content.daily539Res / drawNumberSize）修正。"""
     today = datetime.date.today()
     url = (
         "https://api.taiwanlottery.com/TLCAPIWeB/Lottery/Daily539Result"
@@ -696,19 +694,23 @@ def source_marksix_twlottery():
 
 
 def source_marksix_9800():
-    """9800.com.tw 六合彩開獎查詢頁"""
-    url = "http://www.9800.com.tw/lotto649/"
+    """9800.com.tw 六合彩開獎查詢頁
+    2026-08-25 修正：原本網址 http://www.9800.com.tw/lotto649/ 其實是台灣大樂透頁面（設錯了！），
+    正確的香港六合彩頁面是 http://www.9800.com.tw/lotto6/，表格格式也不同，改用專屬解析邏輯。"""
+    url = "http://www.9800.com.tw/lotto6/"
     resp = requests.get(url, headers=HEADERS, timeout=15, verify=False)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
     text = soup.get_text(" ", strip=True)
-    m = re.search(r"(\d{4}[/-]\d{1,2}[/-]\d{1,2}).{0,60}?((?:\d{1,2}\D+){5,6}\d{1,2})", text)
+    m = re.search(
+        r"(\d{6})\s+(\d{4}-\d{2}-\d{2})\s+((?:\d{1,2}\s+){5}\d{1,2})\s*\+\s*(\d{1,2})",
+        text,
+    )
     if not m:
-        raise ValueError("解析失敗，網站結構可能已改版")
-    draw_date = m.group(1)
-    all_numbers = re.findall(r"\d{1,2}", m.group(2))[:7]
-    special = int(all_numbers[6]) if len(all_numbers) >= 7 else None
-    return "", draw_date, normalize_numbers(all_numbers[:6]), special
+        raise ValueError("解析失敗，網站結構可能已改版（9800.com.tw）")
+    period, draw_date, nums_str, special = m.groups()
+    numbers = re.findall(r"\d{1,2}", nums_str)
+    return period, draw_date, normalize_numbers(numbers), int(special)
 
 
 SOURCES_MARKSIX = [
@@ -1069,4 +1071,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-  
