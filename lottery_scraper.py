@@ -61,7 +61,7 @@ HEADERS = {
 
 RETRY_INTERVAL_SECONDS = 5 * 60   # 每 5 分鐘重試一次
 MAX_RETRY_HOURS = 0.5              # 最多重試 30 分鐘，避免無限迴圈
-REQUIRED_AGREEING_SOURCES = 2     # 至少幾個來源號碼一致才算確認
+REQUIRED_AGREEING_SOURCES = 2     # 備援路徑用：找不到「單一來源日期+差異」確認時，至少要幾個來源一致才算數
 
 # --- 雲端儲存設定（2026-08-25 由 Railway 改成 GitHub） ---------------------
 # GITHUB_REPO 格式："帳號名稱/repo名稱"，例如 "redwi/lottery-data"
@@ -188,6 +188,22 @@ def normalize_numbers(raw_list):
     """把任意格式的號碼字串轉成排序後的整數 tuple，方便比對。"""
     nums = [int(n) for n in raw_list if str(n).strip().isdigit()]
     return tuple(sorted(nums))
+
+
+def normalize_draw_date(raw):
+    """把各來源、各種格式的開獎日期字串，統一轉換成 datetime.date 物件。
+    抓不到就回傳 None（代表這個來源沒提供可辨識的日期，呼叫端要當成
+    「無法驗證」處理，不是「日期錯誤」）。
+    支援格式範例：2026-08-25、2026-08-25T00:00:00、2026/08/25、2026年8月25日。"""
+    if not raw:
+        return None
+    m = re.search(r"(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})", str(raw))
+    if not m:
+        return None
+    try:
+        return datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -537,7 +553,8 @@ def save_confirmed(conn, game, period, draw_date, numbers, special, sources):
 def source_539_official():
     """台彩官方 API
     2026-08-25 修正：原本的網址 .../DailyCashResult 已經失效（實測回應 404），
-    正確路徑要帶 month 參數，欄位也不是 dailyCashResult/drawNumberAppear，    已對照官方目前實際格式（content.daily539Res / drawNumberSize）修正。"""
+    正確路徑要帶 month 參數，欄位也不是 dailyCashResult/drawNumberAppear，
+    已對照官方目前實際格式（content.daily539Res / drawNumberSize）修正。"""
     today = datetime.date.today()
     url = (
         "https://api.taiwanlottery.com/TLCAPIWeB/Lottery/Daily539Result"
@@ -806,6 +823,8 @@ def source_fantasy5_lotteryextreme():
     draw_date = m.group(1)
     numbers = re.findall(r"\d{1,2}", m.group(2))[:5]
     return "", draw_date, normalize_numbers(numbers), None
+
+
 SOURCES_FANTASY5 = [
     ("加州彩券官網", source_fantasy5_official),
     ("lotteryusa.com", source_fantasy5_lotteryusa),
@@ -950,8 +969,19 @@ GAME_CONFIG = {
 # ---------------------------------------------------------------------------
 # 交叉比對邏輯
 # ---------------------------------------------------------------------------
-def try_cross_check(game_key):
-    """呼叫該遊戲所有「未被停用」的來源，回傳 (period, draw_date, numbers, special, agreeing_source_names) 或 None"""
+def try_cross_check(game_key, conn):
+    """呼叫該遊戲所有「未被停用」的來源，回傳 (period, draw_date, numbers, special, agreeing_source_names) 或 None。
+
+    確認規則（2026-08-26 調整，把「至少 2 個來源一致」放寬成主要用單一來源驗證）：
+    - 主要路徑：只要有 1 個來源同時符合
+        1) 開獎日期可辨識，且等於今天
+        2) 抓到的號碼跟資料庫裡「最新一筆」（不限日期）不同
+      就視為最新一期已確認，不用等其他來源一致。
+    - 備援路徑：如果沒有任何單一來源同時通過上述兩項（例如今天還沒開獎、
+      或抓到的日期都無法辨識），才退回舊邏輯：只要有 REQUIRED_AGREEING_SOURCES
+      個以上來源號碼彼此一致，也視為確認（一樣會做日期新鮮度檢查，避免多個
+      來源剛好都回傳同一份過期快取）。
+    """
     cfg = GAME_CONFIG[game_key]
     fetched = []
     for name, fn in cfg["sources"]:
@@ -975,25 +1005,71 @@ def try_cross_check(game_key):
         disabled_count = len(cfg["sources"]) - active_count
         log(f"  （目前有 {disabled_count} 個來源已因長期失敗被停用，剩 {active_count} 個來源在使用）")
 
-    if len(fetched) < REQUIRED_AGREEING_SOURCES:
-        log(f"  可用來源不足 {REQUIRED_AGREEING_SOURCES} 個，本輪無法比對")
+    if not fetched:
+        log("  本輪所有來源都抓取失敗，無法比對")
         return None
 
     from collections import Counter
+
+    today = datetime.date.today()
+    latest_numbers = get_latest_numbers(conn, cfg["name"])
+
+    # 主要路徑：單一來源即可確認 —— 日期是今天，且號碼跟資料庫最新一期不同
+    for name, period, draw_date, numbers, special in fetched:
+        parsed_date = normalize_draw_date(draw_date)
+        if parsed_date != today:
+            continue  # 日期無法辨識，或不是今天，跳過這個來源
+        if latest_numbers is not None and numbers == latest_numbers:
+            continue  # 跟資料庫最新一期一樣，可能是舊資料快取，跳過這個來源
+        log(f"  {cfg['name']} - {name}：日期驗證為今天（{today}），"
+            f"且號碼與資料庫最新一期不同，判定為最新資料，單一來源即可確認")
+        return period, draw_date, numbers, special, [name]
+
+    # 備援路徑：沒有任何單一來源同時通過「日期＋差異」驗證時，退回舊邏輯——
+    # REQUIRED_AGREEING_SOURCES 個以上來源號碼彼此一致，也視為確認
     counter = Counter(item[3] for item in fetched)
     best_numbers, count = counter.most_common(1)[0]
     if count < REQUIRED_AGREEING_SOURCES:
-        log("  各來源號碼不一致，本輪無法確認")
+        log("  沒有來源同時通過「日期＋資料差異」驗證，也沒有足夠來源號碼一致，本輪無法確認")
         return None
 
     agreeing = [item for item in fetched if item[3] == best_numbers]
     period = next((p for _, p, _, _, _ in agreeing if p), "")
     draw_date = next((d for _, _, d, _, _ in agreeing if d), "")
+
+    # 日期新鮮度檢查：避免多個來源剛好都回傳「同一份過期快取」被誤判為交叉確認成功。
+    # 只有在至少一個一致來源提供了「可辨識」的日期時才檢查；若都無法辨識日期，
+    # 代表這些來源本來就不提供日期資訊，不因此擋下確認（維持原本行為，避免卡死）。
+    parsed_dates = [normalize_draw_date(d) for _, _, d, _, _ in agreeing]
+    parsed_dates = [d for d in parsed_dates if d is not None]
+    if parsed_dates and today not in parsed_dates:
+        stale_list = ", ".join(sorted({d.strftime("%Y-%m-%d") for d in parsed_dates}))
+        log(f"  {cfg['name']}：{len(agreeing)} 個來源號碼一致，"
+            f"但開獎日期是 {stale_list}，跟今天（{today}）對不起來，"
+            f"判定為舊資料快取，本輪不予確認")
+        return None
+
     # 特別號：在號碼一致的來源中，取出現次數最多的特別號值（可能有來源解析不到，忽略 None）
     specials = [s for _, _, _, _, s in agreeing if s is not None]
     special = Counter(specials).most_common(1)[0][0] if specials else None
     agreeing_names = [name for name, _, _, _, _ in agreeing]
     return period, draw_date, best_numbers, special, agreeing_names
+
+
+def get_latest_numbers(conn, game):
+    """取得該遊戲資料庫裡「最新一筆」（不限日期）的號碼，回傳排序後的整數 tuple；
+    沒有任何紀錄則回傳 None。供 try_cross_check 判斷「這次抓到的號碼是不是新的」。"""
+    row = conn.execute(
+        """
+        SELECT numbers FROM draws
+        WHERE game = ?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (game,),
+    ).fetchone()
+    if not row or not row[0]:
+        return None
+    return normalize_numbers(row[0].split())
 
 
 def already_confirmed_today(conn, game):
@@ -1040,7 +1116,7 @@ def run_until_confirmed(game_key):
     while datetime.datetime.now() < deadline:
         attempt += 1
         log(f"第 {attempt} 次嘗試...")
-        result = try_cross_check(game_key)
+        result = try_cross_check(game_key, conn)
         if result:
             period, draw_date, numbers, special, sources = result
             save_confirmed(conn, cfg["name"], period, draw_date, numbers, special, sources)
