@@ -190,20 +190,50 @@ def normalize_numbers(raw_list):
     return tuple(sorted(nums))
 
 
+_MONTH_NAME_TO_NUM = {
+    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+    "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+}
+
+
 def normalize_draw_date(raw):
     """把各來源、各種格式的開獎日期字串，統一轉換成 datetime.date 物件。
     抓不到就回傳 None（代表這個來源沒提供可辨識的日期，呼叫端要當成
     「無法驗證」處理，不是「日期錯誤」）。
-    支援格式範例：2026-08-25、2026-08-25T00:00:00、2026/08/25、2026年8月25日。"""
+
+    做法：依序嘗試各種已知格式的規則，只要抓到「年、月、日」三個數字，
+    就統一組成 datetime.date 回傳；每種格式的分隔符號、順序不同沒關係，
+    只要能抓出這三個數字就算成功辨識。
+
+    支援格式範例：
+    - 2026-08-25、2026-08-25T00:00:00（ISO，含時間也可以）
+    - 2026/08/25
+    - 2026年8月25日
+    - TUE/AUG 25, 2026、AUG 25, 2026、August 25, 2026（加州彩券官網等英文來源）
+    """
     if not raw:
         return None
-    m = re.search(r"(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})", str(raw))
-    if not m:
-        return None
-    try:
-        return datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-    except ValueError:
-        return None
+    s = str(raw).strip()
+
+    # 格式一：YYYY 開頭，用 -／年 分隔（可能後面還接時間或中文「日」，不影響辨識）
+    m = re.search(r"(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})", s)
+    if m:
+        try:
+            return datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            return None
+
+    # 格式二：英文月份名稱（縮寫或全名皆可），例如 "TUE/AUG 25, 2026"
+    m = re.search(r"([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})", s)
+    if m:
+        month = _MONTH_NAME_TO_NUM.get(m.group(1)[:3].upper())
+        if month:
+            try:
+                return datetime.date(int(m.group(3)), month, int(m.group(2)))
+            except ValueError:
+                return None
+
+    return None
 
 
 # ---------------------------------------------------------------------------
