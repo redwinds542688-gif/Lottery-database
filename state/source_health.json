@@ -45,7 +45,7 @@
     "台彩官方API": {
       "first_fail_date": null,
       "disabled": false,
-      "last_success_date": "2026-08-26"
+      "last_success_date": "2026-08-28"
     },
     "i539.tw": {
       "first_fail_date": "2026-08-25",
@@ -75,7 +75,7 @@
     "9800.com.tw": {
       "first_fail_date": null,
       "disabled": false,
-      "last_success_date": "2026-08-26"
+      "last_success_date": "2026-08-28"
     },
     "Google新聞搜尋": {
       "first_fail_date": "2026-08-25",
