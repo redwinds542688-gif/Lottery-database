@@ -55,8 +55,8 @@ jobs:
           git pull --rebase origin main
           git push
 
-      - name: 今天已確認，停用本排程直到明天（凌晨會自動重新啟用）
-        if: steps.run.outputs.confirmed == 'true'
+      - name: 今天已確認（僅限自動排程觸發），停用本排程直到明天（凌晨會自動重新啟用）
+        if: steps.run.outputs.confirmed == 'true' && github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh workflow disable "scrape-539.yml"
