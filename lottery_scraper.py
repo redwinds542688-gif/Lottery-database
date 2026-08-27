@@ -32,7 +32,7 @@ import json
 import os
 import re
 import sqlite3
-import time
+import sys
 import xml.etree.ElementTree as ET
 
 import requests
@@ -59,8 +59,10 @@ HEADERS = {
     )
 }
 
-RETRY_INTERVAL_SECONDS = 5 * 60   # 每 5 分鐘重試一次
-MAX_RETRY_HOURS = 0.5              # 最多重試 30 分鐘，避免無限迴圈
+# 2026-08-27 起改成「單次嘗試」設計：每次執行只抓一輪就結束，不在程式內部
+# 重試等待（原本的 RETRY_INTERVAL_SECONDS / MAX_RETRY_HOURS 迴圈重試機制已移除）。
+# 重試改交給 GitHub Actions 排程「每小時觸發一次」負責，這一輪沒抓到，
+# 下個整點排程會自動再抓一次，直到某次成功為止。
 REQUIRED_AGREEING_SOURCES = 2     # 備援路徑用：找不到「單一來源日期+差異」確認時，至少要幾個來源一致才算數
 
 # GitHub Actions 執行環境的系統時區預設是 UTC，不是台灣時間。如果直接呼叫
@@ -1179,6 +1181,12 @@ def already_confirmed_today(conn, game):
 
 
 def run_until_confirmed(game_key):
+    """單次嘗試設計（2026-08-27 調整）：
+    每次執行只抓一輪、不在程式內部重試等待。原本的「30 分鐘內每 5 分鐘重試」
+    邏輯，改成交給外層 GitHub Actions 排程「每小時觸發一次」來負責重試——
+    這一輪沒抓到就直接結束，下個整點排程會自動再抓一次。因為前面已經有
+    「今天已經抓取並確認過」的檢查，一旦某次成功，同一天內其餘整點觸發
+    都會在幾秒內直接跳過，不會浪費資源。"""
     cfg = GAME_CONFIG[game_key]
     conn = init_db()
 
@@ -1199,33 +1207,24 @@ def run_until_confirmed(game_key):
         return True
 
     update_status(game_key, fetching=True)
+    log(f"開始抓取 {cfg['name']}，本輪只嘗試 1 次；若未確認，下個整點排程會自動再抓一次")
 
-    deadline = datetime.datetime.now() + datetime.timedelta(hours=MAX_RETRY_HOURS)
-    attempt = 0
+    result = try_cross_check(game_key, conn)
+    if result:
+        period, draw_date, numbers, special, sources = result
+        save_confirmed(conn, cfg["name"], period, draw_date, numbers, special, sources)
+        update_status(
+            game_key,
+            fetching=False,
+            date=taiwan_today().strftime("%Y-%m-%d"),
+            weekday=today_weekday_zh(),
+            numbers=list(numbers),
+            special=special,
+        )
+        conn.close()
+        return True
 
-    log(f"開始追蹤 {cfg['name']}，將持續重試直到號碼確認為止（上限 30 分鐘）")
-
-    while datetime.datetime.now() < deadline:
-        attempt += 1
-        log(f"第 {attempt} 次嘗試...")
-        result = try_cross_check(game_key, conn)
-        if result:
-            period, draw_date, numbers, special, sources = result
-            save_confirmed(conn, cfg["name"], period, draw_date, numbers, special, sources)
-            update_status(
-                game_key,
-                fetching=False,
-                date=taiwan_today().strftime("%Y-%m-%d"),
-                weekday=today_weekday_zh(),
-                numbers=list(numbers),
-                special=special,
-            )
-            conn.close()
-            return True
-        log(f"尚未確認，{RETRY_INTERVAL_SECONDS // 60} 分鐘後重試...")
-        time.sleep(RETRY_INTERVAL_SECONDS)
-
-    log(f"{cfg['name']} 已超過重試上限仍未確認，今日暫不存入資料庫，請人工檢查來源網站")
+    log(f"{cfg['name']} 本輪未確認，今日暫不存入資料庫，下個整點排程會自動再抓一次")
     update_status(game_key, fetching=False)
     conn.close()
     return False
@@ -1234,8 +1233,36 @@ def run_until_confirmed(game_key):
 def main():
     parser = argparse.ArgumentParser(description="多來源交叉比對開獎號碼爬蟲")
     parser.add_argument("--game", required=True, choices=list(GAME_CONFIG.keys()), help="要抓取的彩券")
+    parser.add_argument(
+        "--check-confirmed-only",
+        action="store_true",
+        help="只檢查今天是否已經確認過，不抓取也不寫入任何資料。"
+             "exit code 0 代表今天已確認，1 代表尚未確認。"
+             "給「每日重新啟用排程」的 workflow 用，判斷要不要跳過某個彩券。",
+    )
     args = parser.parse_args()
-    run_until_confirmed(args.game)
+
+    if args.check_confirmed_only:
+        cfg = GAME_CONFIG[args.game]
+        conn = init_db()
+        existing = already_confirmed_today(conn, cfg["name"])
+        conn.close()
+        sys.exit(0 if existing else 1)
+
+    confirmed = run_until_confirmed(args.game)
+
+    # 把「今天是否已確認」寫進 GitHub Actions 的 step output（$GITHUB_OUTPUT），
+    # 讓 workflow yml 可以根據這個結果，決定要不要把「每小時觸發」的排程
+    # 停用到明天（避免今天已經抓到了，還一直每小時空轉觸發）。
+    # 本機直接執行（不是在 GitHub Actions 環境）時 GITHUB_OUTPUT 不存在，
+    # 這段就直接跳過，不影響本機測試。
+    github_output_path = os.environ.get("GITHUB_OUTPUT")
+    if github_output_path:
+        try:
+            with open(github_output_path, "a", encoding="utf-8") as f:
+                f.write(f"confirmed={'true' if confirmed else 'false'}\n")
+        except Exception as e:
+            log(f"寫入 GITHUB_OUTPUT 失敗（不影響爬取結果）：{e}")
 
 
 if __name__ == "__main__":
