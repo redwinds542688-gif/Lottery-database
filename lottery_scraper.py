@@ -33,6 +33,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 import xml.etree.ElementTree as ET
 
 import requests
@@ -63,6 +64,13 @@ HEADERS = {
 # 重試等待（原本的 RETRY_INTERVAL_SECONDS / MAX_RETRY_HOURS 迴圈重試機制已移除）。
 # 重試改交給 GitHub Actions 排程「每小時觸發一次」負責，這一輪沒抓到，
 # 下個整點排程會自動再抓一次，直到某次成功為止。
+#
+# 後來（同一天稍晚）又加了一個例外：如果今天是該彩券「常見的開獎日」
+# （見 GAME_CONFIG 的 typical_draw_weekdays），本輪會在這裡設定的時間
+# 上限內反覆重試（而不是只抓 1 次），提高抓到的機會；不是常見開獎日的
+# 話，才維持原本的單次嘗試。
+DRAW_DAY_SEARCH_MINUTES = 5          # 開獎日當天，本輪最多搜尋幾分鐘
+DRAW_DAY_RETRY_INTERVAL_SECONDS = 50  # 開獎日當天，搜尋期間每隔幾秒重試一次
 REQUIRED_AGREEING_SOURCES = 2     # 備援路徑用：找不到「單一來源日期+差異」確認時，至少要幾個來源一致才算數
 
 # GitHub Actions 執行環境的系統時區預設是 UTC，不是台灣時間。如果直接呼叫
@@ -1060,8 +1068,20 @@ SOURCES_LOTTO649 = [
 
 
 GAME_CONFIG = {
-    "539": {"name": "今彩539", "sources": SOURCES_539},
-    "marksix": {"name": "香港六合彩", "sources": SOURCES_MARKSIX},
+    # typical_draw_weekdays：這個彩券「正常情況下」的開獎星期幾，用 Python
+    # date.weekday() 的編號（週一=0 ... 週日=6）。用來決定當天要不要多花
+    # 時間搜尋（見下方 run_until_confirmed 的說明）：
+    #   - 是這個彩券常見開獎日 → 本輪最多搜尋 DRAW_DAY_SEARCH_MINUTES 分鐘，
+    #     每隔一小段時間重試一次，提高抓到的機會。
+    #   - 不是常見開獎日（含過年加開這種例外情況）→ 維持單次嘗試就好，
+    #     跟原本沒改過的行為一樣，不會變得更差，只是不會額外多花力氣。
+    #   - 設成 None 代表「每天都當作可能的開獎日」，固定都用比較久的搜尋
+    #     （適用開獎日不固定、或本來就每天開獎的彩券）。
+    "539": {"name": "今彩539", "sources": SOURCES_539, "typical_draw_weekdays": {0, 1, 2, 3, 4, 5}},
+    # 香港六合彩：開獎日是週二、週四固定，加上週六或週日擇一（依當週賽馬
+    # 日而定，無法單純用星期幾判斷），沒辦法安全縮小成固定的星期集合，
+    # 所以設成 None，每天都用比較久的搜尋，寧可多花一點資源也不要漏抓。
+    "marksix": {"name": "香港六合彩", "sources": SOURCES_MARKSIX, "typical_draw_weekdays": None},
     # 加州天天樂：不同來源對「開獎日期」的標示慣例不一樣，不能整個彩券
     # 套用同一個時差校正——
     #   - 「加州彩券官網」等美國網站標示的是美國加州當地日期，開獎在
@@ -1072,16 +1092,19 @@ GAME_CONFIG = {
     #     反而對不起來。這類尚未實際驗證過慣例的來源，一律不校正（0）。
     # 所以改成「source_date_offset_days」逐一設定每個來源要不要校正，
     # 沒列出來的來源預設不校正。
+    # 天天樂每天都開獎，typical_draw_weekdays 也設 None（每天都當開獎日）。
     "fantasy5": {
         "name": "加州天天樂",
         "sources": SOURCES_FANTASY5,
+        "typical_draw_weekdays": None,
         "source_date_offset_days": {
             "加州彩券官網": 1,
             "lottery.net": 1,
             "lotteryextreme.com": 1,
         },
     },
-    "lotto649": {"name": "大樂透", "sources": SOURCES_LOTTO649},
+    # 大樂透平常只有週二（1）、週五（4）開獎
+    "lotto649": {"name": "大樂透", "sources": SOURCES_LOTTO649, "typical_draw_weekdays": {1, 4}},
 }
 
 
@@ -1220,12 +1243,18 @@ def already_confirmed_today(conn, game):
 
 
 def run_until_confirmed(game_key):
-    """單次嘗試設計（2026-08-27 調整）：
-    每次執行只抓一輪、不在程式內部重試等待。原本的「30 分鐘內每 5 分鐘重試」
-    邏輯，改成交給外層 GitHub Actions 排程「每小時觸發一次」來負責重試——
-    這一輪沒抓到就直接結束，下個整點排程會自動再抓一次。因為前面已經有
-    「今天已經抓取並確認過」的檢查，一旦某次成功，同一天內其餘整點觸發
-    都會在幾秒內直接跳過，不會浪費資源。"""
+    """單次嘗試設計（2026-08-27 調整，同一天稍晚再加開獎日例外）：
+    每次執行預設只抓一輪、不在程式內部重試等待。原本的「30 分鐘內每 5 分鐘
+    重試」邏輯，改成交給外層 GitHub Actions 排程「每小時觸發一次」來負責
+    重試——這一輪沒抓到就直接結束，下個整點排程會自動再抓一次。因為前面
+    已經有「今天已經抓取並確認過」的檢查，一旦某次成功，同一天內其餘整點
+    觸發都會在幾秒內直接跳過，不會浪費資源。
+
+    例外：如果今天是這個彩券「常見的開獎日」（見 GAME_CONFIG 的
+    typical_draw_weekdays），本輪不會只抓 1 次就放棄，而是在
+    DRAW_DAY_SEARCH_MINUTES 分鐘內每隔 DRAW_DAY_RETRY_INTERVAL_SECONDS 秒
+    重試一次，提高抓到的機會；不是常見開獎日（含過年加開這類例外情況）
+    的話，維持原本的單次嘗試，不會比原本更差。"""
     cfg = GAME_CONFIG[game_key]
     conn = init_db()
 
@@ -1246,9 +1275,28 @@ def run_until_confirmed(game_key):
         return True
 
     update_status(game_key, fetching=True)
-    log(f"開始抓取 {cfg['name']}，本輪只嘗試 1 次；若未確認，下個整點排程會自動再抓一次")
 
-    result = try_cross_check(game_key, conn)
+    typical_weekdays = cfg.get("typical_draw_weekdays")
+    is_draw_day = typical_weekdays is None or taiwan_today().weekday() in typical_weekdays
+
+    if is_draw_day:
+        log(f"今天可能是 {cfg['name']} 的開獎日，本輪最多搜尋 "
+            f"{DRAW_DAY_SEARCH_MINUTES} 分鐘（每隔 {DRAW_DAY_RETRY_INTERVAL_SECONDS} 秒重試一次）")
+        deadline = time.monotonic() + DRAW_DAY_SEARCH_MINUTES * 60
+        attempt = 0
+        result = None
+        while True:
+            attempt += 1
+            log(f"第 {attempt} 次嘗試...")
+            result = try_cross_check(game_key, conn)
+            if result or time.monotonic() >= deadline:
+                break
+            time.sleep(DRAW_DAY_RETRY_INTERVAL_SECONDS)
+    else:
+        log(f"今天不是 {cfg['name']} 的常見開獎日，本輪只嘗試 1 次；"
+            f"若未確認，下個整點排程會自動再抓一次")
+        result = try_cross_check(game_key, conn)
+
     if result:
         period, draw_date, numbers, special, sources = result
         save_confirmed(conn, cfg["name"], period, draw_date, numbers, special, sources)
