@@ -79,6 +79,15 @@ def taiwan_today():
     return datetime.datetime.now(TAIWAN_TZ).date()
 
 
+def taiwan_now_str():
+    """回傳台灣目前的日期時間字串（YYYY-MM-DD HH:MM:SS），不受執行環境
+    系統時區影響。GitHub Actions 系統時間預設是 UTC，如果直接用
+    datetime.datetime.now()，寫進 checked_at / log 時間戳記 / status.json
+    的 updated_at 都會是 UTC 時間，跟台灣時間差 8 小時，容易誤導看資料
+    的人。所以這些地方全部改用這個函式取得時間字串。"""
+    return datetime.datetime.now(TAIWAN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
 # --- 雲端儲存設定（2026-08-25 由 Railway 改成 GitHub） ---------------------
 # GITHUB_REPO 格式："帳號名稱/repo名稱"，例如 "redwi/lottery-data"
 # GITHUB_TOKEN 是有該 repo 讀寫權限的 Personal Access Token（設定方式見 HANDOFF）
@@ -159,7 +168,7 @@ def upload_to_cloud(game, period, draw_date, numbers, special, sources):
         "numbers": " ".join(str(n) for n in numbers),
         "special_number": str(special) if special is not None else "",
         "agreeing_sources": ", ".join(sources),
-        "checked_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "checked_at": taiwan_now_str(),
     }
 
     for attempt in range(1, GITHUB_UPLOAD_MAX_RETRIES + 1):
@@ -168,9 +177,17 @@ def upload_to_cloud(game, period, draw_date, numbers, special, sources):
             game_records = data.setdefault(game, [])
 
             # 跟 Railway 版本一樣的去重規則：同一期別+同一組號碼就不重複加入
+            # 去重規則（2026-08-27 修正）：只比對「號碼是否一樣」，不再要求
+            # 期別也要一致。原本要求 period 也要相同，但早期版本的資料
+            # 沒有存 period（空字串），跟後來版本抓到的同一期資料（有真正
+            # 期別）拿去比對時，因為 period 對不起來（"" != "11979"），
+            # 就算號碼完全相同也不會被判定成重複，導致同一期開獎被重複
+            # 寫入兩筆、只是日期標示方式不同（可對照 fantasy5 實際發生的
+            # 案例：MON/AUG 24 跟 2026-08-25 其實是同一期）。
+            # 同一種彩券在合理時間範圍內開出完全相同的一組號碼，機率低到
+            # 可以放心當作「同一期」處理，不需要 period 再加一層限制。
             is_duplicate = any(
-                r.get("period") == record["period"] and r.get("numbers") == record["numbers"]
-                for r in game_records
+                r.get("numbers") == record["numbers"] for r in game_records
             )
             if is_duplicate:
                 log(f"GitHub 上已經有相同資料，略過上傳：{game} {numbers}")
@@ -196,7 +213,7 @@ def upload_to_cloud(game, period, draw_date, numbers, special, sources):
 
 
 def log(msg):
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = taiwan_now_str()
     print(f"[{now}] {msg}")
 
 
@@ -563,7 +580,7 @@ def update_status(game_key, **fields):
 
     entry = data.get(game_key, {})
     entry.update(fields)
-    entry["updated_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    entry["updated_at"] = taiwan_now_str()
     data[game_key] = entry
 
     try:
@@ -618,7 +635,7 @@ def save_confirmed(conn, game, period, draw_date, numbers, special, sources):
                 " ".join(str(n) for n in numbers),
                 str(special) if special is not None else "",
                 ", ".join(sources),
-                datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                taiwan_now_str(),
             ),
         )
         conn.commit()
