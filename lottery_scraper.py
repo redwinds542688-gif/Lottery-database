@@ -63,6 +63,20 @@ RETRY_INTERVAL_SECONDS = 5 * 60   # 每 5 分鐘重試一次
 MAX_RETRY_HOURS = 0.5              # 最多重試 30 分鐘，避免無限迴圈
 REQUIRED_AGREEING_SOURCES = 2     # 備援路徑用：找不到「單一來源日期+差異」確認時，至少要幾個來源一致才算數
 
+# GitHub Actions 執行環境的系統時區預設是 UTC，不是台灣時間。如果直接呼叫
+# Python 內建的 datetime.date.today()，在台灣時間凌晨 0 點到早上 8 點之間
+# 執行（例如手動觸發測試）時，會誤判成「昨天」，導致日期新鮮度比對出錯。
+# 所以全部「今天日期」的判斷都要透過下面這個 taiwan_today() 函式取得，
+# 不要再直接呼叫 datetime.date.today()。用固定 +8 小時位移計算日期，
+# 不依賴系統時區設定，也不需要額外安裝 tzdata。
+TAIWAN_TZ = datetime.timezone(datetime.timedelta(hours=8))
+
+
+def taiwan_today():
+    """回傳台灣目前的日期（UTC+8），不受執行環境系統時區影響。"""
+    return datetime.datetime.now(TAIWAN_TZ).date()
+
+
 # --- 雲端儲存設定（2026-08-25 由 Railway 改成 GitHub） ---------------------
 # GITHUB_REPO 格式："帳號名稱/repo名稱"，例如 "redwi/lottery-data"
 # GITHUB_TOKEN 是有該 repo 讀寫權限的 Personal Access Token（設定方式見 HANDOFF）
@@ -208,14 +222,23 @@ def normalize_draw_date(raw):
     支援格式範例：
     - 2026-08-25、2026-08-25T00:00:00（ISO，含時間也可以）
     - 2026/08/25
-    - 2026年8月25日
-    - TUE/AUG 25, 2026、AUG 25, 2026、August 25, 2026（加州彩券官網等英文來源）
+    - 2026年8月25日（西元年）
+    - 115年8月25日（民國年，2-3 碼＋「年」，自動 +1911 換算成西元年；
+      奧索樂透網、大樂透民間來源偶爾會用這種格式）
+    - TUE/AUG 25, 2026、AUG 25, 2026、August 25, 2026（月份名在前，
+      加州彩券官網等英文來源）
+    - 25 August 2026（日期在前、月份名在後，lottery.hk 香港來源）
+    - 8/25/2026（美式 M/D/YYYY，年份放最後，加州天天樂的美國來源）
+      注意：這個格式本身無法區分「月/日」還是「日/月」，這裡固定當成
+      美式 M/D/YYYY 解讀，因為目前唯一會用到這個格式的都是美國網站；
+      如果未來有台灣/香港來源也用「數字/數字/年份放最後」這種格式、
+      但其實是日/月順序，會被解析錯誤，屆時要另外處理。
     """
     if not raw:
         return None
     s = str(raw).strip()
 
-    # 格式一：YYYY 開頭，用 -／年 分隔（可能後面還接時間或中文「日」，不影響辨識）
+    # 格式一：西元年在前，用 -／年 分隔（後面接時間或中文「日」都不影響辨識）
     m = re.search(r"(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})", s)
     if m:
         try:
@@ -223,7 +246,15 @@ def normalize_draw_date(raw):
         except ValueError:
             return None
 
-    # 格式二：英文月份名稱（縮寫或全名皆可），例如 "TUE/AUG 25, 2026"
+    # 格式二：民國年在前，例如 "115年8月25日"（2-3 碼數字＋「年」，換算 +1911）
+    m = re.search(r"(?<!\d)(\d{2,3})年(\d{1,2})月(\d{1,2})日", s)
+    if m:
+        try:
+            return datetime.date(int(m.group(1)) + 1911, int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            return None
+
+    # 格式三：英文月份名稱在前（縮寫或全名皆可），例如 "TUE/AUG 25, 2026"
     m = re.search(r"([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})", s)
     if m:
         month = _MONTH_NAME_TO_NUM.get(m.group(1)[:3].upper())
@@ -232,6 +263,24 @@ def normalize_draw_date(raw):
                 return datetime.date(int(m.group(3)), month, int(m.group(2)))
             except ValueError:
                 return None
+
+    # 格式四：日期在前、英文月份名稱在後，例如 "25 August 2026"（lottery.hk）
+    m = re.search(r"(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})", s)
+    if m:
+        month = _MONTH_NAME_TO_NUM.get(m.group(2)[:3].upper())
+        if month:
+            try:
+                return datetime.date(int(m.group(3)), month, int(m.group(1)))
+            except ValueError:
+                return None
+
+    # 格式五：美式 M/D/YYYY（年份放最後，純數字），例如 "8/25/2026"
+    m = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", s)
+    if m:
+        try:
+            return datetime.date(int(m.group(3)), int(m.group(1)), int(m.group(2)))
+        except ValueError:
+            return None
 
     return None
 
@@ -275,7 +324,7 @@ def fetch_pilio_latest(url, num_count, has_special):
     resp = requests.get(url, headers=HEADERS, timeout=15, verify=False)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
-    current_year = datetime.date.today().year
+    current_year = taiwan_today().year
     date_field_re = re.compile(r"(\d{1,2})/(\d{1,2})\s+(\d{2})\(([^)]+)\)")
 
     for tr in soup.find_all("tr"):
@@ -391,12 +440,15 @@ def _search_news_for_numbers(query, num_count, has_special=False):
             y, mo, d = m_date.groups()
             draw_date = f"{y}-{int(mo):02d}-{int(d):02d}"
         else:
-            # 新聞常只寫「今天」沒有完整日期，退而求其次用發稿時間當開獎日
+            # 新聞常只寫「今天」沒有完整日期，退而求其次用發稿時間當開獎日；
+            # 如果連發稿時間都解析不出來，就留空字串，讓 normalize_draw_date
+            # 回傳 None（代表「無法驗證日期」），不要冒充今天的日期 ——
+            # 冒充今天會讓這個來源永遠通過日期新鮮度檢查，等於形同虛設。
             try:
                 pub_dt = email.utils.parsedate_to_datetime(item.findtext("pubDate"))
                 draw_date = pub_dt.strftime("%Y-%m-%d")
             except Exception:
-                draw_date = datetime.date.today().strftime("%Y-%m-%d")
+                draw_date = ""
 
         special = None
         if has_special and len(all_numbers) >= total_needed:
@@ -431,7 +483,7 @@ WEEKDAY_ZH = ["一", "二", "三", "四", "五", "六", "日"]
 
 
 def today_weekday_zh():
-    return WEEKDAY_ZH[datetime.date.today().weekday()]
+    return WEEKDAY_ZH[taiwan_today().weekday()]
 
 
 # ---------------------------------------------------------------------------
@@ -473,7 +525,7 @@ def record_source_result(game_key, source_name, success):
         "last_success_date": None,
     })
 
-    today_str = datetime.date.today().strftime("%Y-%m-%d")
+    today_str = taiwan_today().strftime("%Y-%m-%d")
 
     if success:
         entry["last_success_date"] = today_str
@@ -486,7 +538,7 @@ def record_source_result(game_key, source_name, success):
             entry["first_fail_date"] = today_str
         else:
             first_fail = datetime.datetime.strptime(entry["first_fail_date"], "%Y-%m-%d").date()
-            days_failing = (datetime.date.today() - first_fail).days
+            days_failing = (taiwan_today() - first_fail).days
             if days_failing >= SOURCE_DISABLE_DAYS and not entry.get("disabled"):
                 entry["disabled"] = True
                 log(f"  ⚠️ 來源「{source_name}」已連續失敗 {days_failing} 天（超過 {SOURCE_DISABLE_DAYS} 天），"
@@ -585,7 +637,7 @@ def source_539_official():
     2026-08-25 修正：原本的網址 .../DailyCashResult 已經失效（實測回應 404），
     正確路徑要帶 month 參數，欄位也不是 dailyCashResult/drawNumberAppear，
     已對照官方目前實際格式（content.daily539Res / drawNumberSize）修正。"""
-    today = datetime.date.today()
+    today = taiwan_today()
     url = (
         "https://api.taiwanlottery.com/TLCAPIWeB/Lottery/Daily539Result"
         f"?period&month={today.year}-{today.month:02d}&pageSize=31"
@@ -657,7 +709,7 @@ def source_539_arclink():
 
 
 def source_539_twlottery():
-    current_year = datetime.date.today().year
+    current_year = taiwan_today().year
     return fetch_twlottery_latest(f"https://twlottery.in/lottery539/list/{current_year}", 5, False)
 
 
@@ -678,7 +730,7 @@ SOURCES_539 = [
 # ---------------------------------------------------------------------------
 def source_marksix_hkjc():
     """香港賽馬會 getJSON 端點"""
-    today = datetime.date.today()
+    today = taiwan_today()
     start = today - datetime.timedelta(days=10)
     url = "https://bet.hkjc.com/marksix/getJSON.aspx"
     params = {"sd": start.strftime("%Y%m%d"), "ed": today.strftime("%Y%m%d"), "sb": 0}
@@ -737,7 +789,7 @@ def source_marksix_lotto8():
 
 
 def source_marksix_twlottery():
-    current_year = datetime.date.today().year
+    current_year = taiwan_today().year
     return fetch_twlottery_latest(f"https://twlottery.in/lotteryHK/list/{current_year}", 6, True)
 
 
@@ -831,7 +883,7 @@ def source_fantasy5_lotto8():
 
 
 def source_fantasy5_twlottery():
-    current_year = datetime.date.today().year
+    current_year = taiwan_today().year
     return fetch_twlottery_latest(f"https://twlottery.in/lotteryCA5/list/{current_year}", 5, False)
 
 
@@ -877,7 +929,7 @@ def source_lotto649_official():
     （6正選+1特別號，且是開獎順序未排序），會把特別號也一起誤判成正選號碼去跟其他來源比對；
     specialNumber 這個欄位官方API也根本不存在，特別號永遠抓不到。
     已改用 drawNumberSize，並比照 backfill.py 的作法把前6碼當正選、第7碼當特別號分開處理。"""
-    today = datetime.date.today()
+    today = taiwan_today()
     url = (
         "https://api.taiwanlottery.com/TLCAPIWeB/Lottery/Lotto649Result"
         f"?period&month={today.year}-{today.month:02d}&pageSize=31"
@@ -991,7 +1043,10 @@ SOURCES_LOTTO649 = [
 GAME_CONFIG = {
     "539": {"name": "今彩539", "sources": SOURCES_539},
     "marksix": {"name": "香港六合彩", "sources": SOURCES_MARKSIX},
-    "fantasy5": {"name": "加州天天樂", "sources": SOURCES_FANTASY5},
+    # 加州天天樂：來源網站標示的是「美國加州當地」開獎日期，開獎在美西晚間，
+    # 換算到台灣時已經是隔天，所以跟「今天」比對前要先把來源日期 +1 天校正，
+    # 才會對得上台灣這邊實際看到新開獎結果的日期。
+    "fantasy5": {"name": "加州天天樂", "sources": SOURCES_FANTASY5, "date_offset_days": 1},
     "lotto649": {"name": "大樂透", "sources": SOURCES_LOTTO649},
 }
 
@@ -1040,18 +1095,23 @@ def try_cross_check(game_key, conn):
         return None
 
     from collections import Counter
+    from datetime import timedelta
 
-    today = datetime.date.today()
+    today = taiwan_today()
+    date_offset_days = cfg.get("date_offset_days", 0)
     latest_numbers = get_latest_numbers(conn, cfg["name"])
 
     # 主要路徑：單一來源即可確認 —— 日期是今天，且號碼跟資料庫最新一期不同
     for name, period, draw_date, numbers, special in fetched:
         parsed_date = normalize_draw_date(draw_date)
+        if parsed_date is not None and date_offset_days:
+            parsed_date = parsed_date + timedelta(days=date_offset_days)
         if parsed_date != today:
-            continue  # 日期無法辨識，或不是今天，跳過這個來源
+            continue  # 日期無法辨識，或（校正時差後）不是今天，跳過這個來源
         if latest_numbers is not None and numbers == latest_numbers:
             continue  # 跟資料庫最新一期一樣，可能是舊資料快取，跳過這個來源
-        log(f"  {cfg['name']} - {name}：日期驗證為今天（{today}），"
+        log(f"  {cfg['name']} - {name}：日期驗證為今天（{today}）"
+            f"{f'（來源原始日期已 +{date_offset_days} 天校正時差）' if date_offset_days else ''}，"
             f"且號碼與資料庫最新一期不同，判定為最新資料，單一來源即可確認")
         return period, draw_date, numbers, special, [name]
 
@@ -1071,6 +1131,8 @@ def try_cross_check(game_key, conn):
     # 只有在至少一個一致來源提供了「可辨識」的日期時才檢查；若都無法辨識日期，
     # 代表這些來源本來就不提供日期資訊，不因此擋下確認（維持原本行為，避免卡死）。
     parsed_dates = [normalize_draw_date(d) for _, _, d, _, _ in agreeing]
+    if date_offset_days:
+        parsed_dates = [d + timedelta(days=date_offset_days) if d is not None else None for d in parsed_dates]
     parsed_dates = [d for d in parsed_dates if d is not None]
     if parsed_dates and today not in parsed_dates:
         stale_list = ", ".join(sorted({d.strftime("%Y-%m-%d") for d in parsed_dates}))
@@ -1104,7 +1166,7 @@ def get_latest_numbers(conn, game):
 
 def already_confirmed_today(conn, game):
     """檢查該遊戲今天是否已經有確認成功的紀錄，避免重複抓取。"""
-    today = datetime.date.today().strftime("%Y-%m-%d")
+    today = taiwan_today().strftime("%Y-%m-%d")
     row = conn.execute(
         """
         SELECT id, numbers, special_number, checked_at FROM draws
@@ -1128,7 +1190,7 @@ def run_until_confirmed(game_key):
         update_status(
             game_key,
             fetching=False,
-            date=datetime.date.today().strftime("%Y-%m-%d"),
+            date=taiwan_today().strftime("%Y-%m-%d"),
             weekday=today_weekday_zh(),
             numbers=[int(n) for n in existing_numbers.split()],
             special=int(existing_special) if existing_special else None,
@@ -1153,7 +1215,7 @@ def run_until_confirmed(game_key):
             update_status(
                 game_key,
                 fetching=False,
-                date=datetime.date.today().strftime("%Y-%m-%d"),
+                date=taiwan_today().strftime("%Y-%m-%d"),
                 weekday=today_weekday_zh(),
                 numbers=list(numbers),
                 special=special,
