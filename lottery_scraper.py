@@ -1045,10 +1045,25 @@ SOURCES_LOTTO649 = [
 GAME_CONFIG = {
     "539": {"name": "今彩539", "sources": SOURCES_539},
     "marksix": {"name": "香港六合彩", "sources": SOURCES_MARKSIX},
-    # 加州天天樂：來源網站標示的是「美國加州當地」開獎日期，開獎在美西晚間，
-    # 換算到台灣時已經是隔天，所以跟「今天」比對前要先把來源日期 +1 天校正，
-    # 才會對得上台灣這邊實際看到新開獎結果的日期。
-    "fantasy5": {"name": "加州天天樂", "sources": SOURCES_FANTASY5, "date_offset_days": 1},
+    # 加州天天樂：不同來源對「開獎日期」的標示慣例不一樣，不能整個彩券
+    # 套用同一個時差校正——
+    #   - 「加州彩券官網」等美國網站標示的是美國加州當地日期，開獎在
+    #     美西晚間，換算到台灣已經是隔天，需要 +1 天校正。
+    #   - lotto-8.com / twlottery.in / pilio.idv.tw 這類台灣的樂透雲鏡像
+    #     站，或是過去用過的 sc888.net，標示的可能已經是「亞洲這邊看到
+    #     結果的日期」（本身就已經是校正過的），如果再 +1 天會校正過頭、
+    #     反而對不起來。這類尚未實際驗證過慣例的來源，一律不校正（0）。
+    # 所以改成「source_date_offset_days」逐一設定每個來源要不要校正，
+    # 沒列出來的來源預設不校正。
+    "fantasy5": {
+        "name": "加州天天樂",
+        "sources": SOURCES_FANTASY5,
+        "source_date_offset_days": {
+            "加州彩券官網": 1,
+            "lottery.net": 1,
+            "lotteryextreme.com": 1,
+        },
+    },
     "lotto649": {"name": "大樂透", "sources": SOURCES_LOTTO649},
 }
 
@@ -1100,20 +1115,21 @@ def try_cross_check(game_key, conn):
     from datetime import timedelta
 
     today = taiwan_today()
-    date_offset_days = cfg.get("date_offset_days", 0)
+    source_offsets = cfg.get("source_date_offset_days", {})
     latest_numbers = get_latest_numbers(conn, cfg["name"])
 
     # 主要路徑：單一來源即可確認 —— 日期是今天，且號碼跟資料庫最新一期不同
     for name, period, draw_date, numbers, special in fetched:
+        offset_days = source_offsets.get(name, 0)
         parsed_date = normalize_draw_date(draw_date)
-        if parsed_date is not None and date_offset_days:
-            parsed_date = parsed_date + timedelta(days=date_offset_days)
+        if parsed_date is not None and offset_days:
+            parsed_date = parsed_date + timedelta(days=offset_days)
         if parsed_date != today:
             continue  # 日期無法辨識，或（校正時差後）不是今天，跳過這個來源
         if latest_numbers is not None and numbers == latest_numbers:
             continue  # 跟資料庫最新一期一樣，可能是舊資料快取，跳過這個來源
         log(f"  {cfg['name']} - {name}：日期驗證為今天（{today}）"
-            f"{f'（來源原始日期已 +{date_offset_days} 天校正時差）' if date_offset_days else ''}，"
+            f"{f'（此來源日期已 +{offset_days} 天校正時差）' if offset_days else ''}，"
             f"且號碼與資料庫最新一期不同，判定為最新資料，單一來源即可確認")
         return period, draw_date, numbers, special, [name]
 
@@ -1130,12 +1146,18 @@ def try_cross_check(game_key, conn):
     draw_date = next((d for _, _, d, _, _ in agreeing if d), "")
 
     # 日期新鮮度檢查：避免多個來源剛好都回傳「同一份過期快取」被誤判為交叉確認成功。
+    # 每個來源各自套用自己的時差校正（同一組一致來源裡，可能有的來源要
+    # +1 天、有的不用），再看有沒有任一個校正後對得上今天。
     # 只有在至少一個一致來源提供了「可辨識」的日期時才檢查；若都無法辨識日期，
     # 代表這些來源本來就不提供日期資訊，不因此擋下確認（維持原本行為，避免卡死）。
-    parsed_dates = [normalize_draw_date(d) for _, _, d, _, _ in agreeing]
-    if date_offset_days:
-        parsed_dates = [d + timedelta(days=date_offset_days) if d is not None else None for d in parsed_dates]
-    parsed_dates = [d for d in parsed_dates if d is not None]
+    parsed_dates = []
+    for src_name, _, d, _, _ in agreeing:
+        parsed = normalize_draw_date(d)
+        if parsed is not None:
+            offset_days = source_offsets.get(src_name, 0)
+            if offset_days:
+                parsed = parsed + timedelta(days=offset_days)
+            parsed_dates.append(parsed)
     if parsed_dates and today not in parsed_dates:
         stale_list = ", ".join(sorted({d.strftime("%Y-%m-%d") for d in parsed_dates}))
         log(f"  {cfg['name']}：{len(agreeing)} 個來源號碼一致，"
