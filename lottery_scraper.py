@@ -856,18 +856,25 @@ SOURCES_MARKSIX = [
 # 加州天天樂 (Fantasy 5) 三個來源
 # ---------------------------------------------------------------------------
 def source_fantasy5_official():
-    """加州彩券官網"""
+    """加州彩券官網
+    2026-08-28 修正：原本 date_match 是對整頁文字（text）搜尋第一個符合日期格式
+    的字串，沒有限定要在該期期別（Draw #N）附近，導致頁面上如果還有其他不相干
+    的日期文字（例如下一期倒數、更新時間等），可能被錯誤配對到這一期，造成不同
+    期別卻標示同一個日期（實際案例：period 11981 被配對到 "WED/AUG 27" ——
+    但 2026-08-27 實際上是星期四，跟 period 11982 的 "THU/AUG 27" 撞期，
+    可判斷 11981 抓到的是不屬於它的日期）。
+    修法：跟號碼一樣，只在期別附近的 window 裡找日期，不要對整頁搜尋。"""
     url = "https://www.calottery.com/en/draw-games/fantasy-5"
     resp = requests.get(url, headers=HEADERS, timeout=15)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
     text = soup.get_text("\n", strip=True)
     draw_match = re.search(r"Draw #(\d+)", text)
-    date_match = re.search(r"([A-Z]{3}/[A-Z]{3}\s\d{1,2},\s\d{4})", text)
     if not draw_match:
         raise ValueError("解析失敗，網站結構可能已改版")
     idx = text.find(draw_match.group(0))
     window = text[idx: idx + 200]
+    date_match = re.search(r"([A-Z]{3}/[A-Z]{3}\s\d{1,2},\s\d{4})", window)
     numbers = re.findall(r"\b\d{1,2}\b", window)[:5]
     return draw_match.group(1), (date_match.group(1) if date_match else ""), normalize_numbers(numbers), None
 
