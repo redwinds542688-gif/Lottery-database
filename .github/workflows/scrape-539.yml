@@ -1,29 +1,14 @@
 name: 爬蟲 - 今彩539
-
 on:
   schedule:
-    # 今彩539 的「一天」改成以 21:00 為起點（不是午夜），跟開獎後續搜尋
-    # 綁在一起：每天 21:00 開始，之後每小時觸發一次（涵蓋整整 24 小時，
-    # 也就是連續 23 小時後回到隔天 21:00），每次觸發最多搜尋 5 分鐘（見
-    # lottery_scraper.py 的 DRAW_DAY_SEARCH_MINUTES / typical_draw_weekdays）。
-    # 一旦某次確認成功，會自動停用本排程直到隔天 21:00（見下方
-    # re-enable-539.yml，這個彩券獨立一份重新啟用排程，時間點跟其他
-    # 三個彩券共用的「每天 00:05 重新啟用」不一樣）。
-    # 分鐘故意設成 7（不是整點 0 分），因為 GitHub Actions 全站流量在每
-    # 小時整點最壅塞，容易延遲或直接跳過排程，錯開幾分鐘可以降低這個
-    # 風險。
-    # cron "7 * * * *" = 每小時的第 7 分鐘都觸發（不限制哪幾個小時）。
     - cron: "7 * * * *"
   workflow_dispatch: {}
-
 permissions:
   contents: write
   actions: write
-
 concurrency:
   group: lottery-scraper-539
   cancel-in-progress: false
-
 jobs:
   scrape:
     runs-on: ubuntu-latest
@@ -31,15 +16,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Install dependencies
         run: pip install -r requirements.txt
-
       - name: Run scraper
         id: run
         env:
@@ -48,7 +30,6 @@ jobs:
           GITHUB_BRANCH: main
           STATE_DIR: state
         run: python lottery_scraper.py --game 539
-
       - name: 提交狀態檔案（lottery.db / status.json / source_health.json）
         run: |
           git config user.name "github-actions[bot]"
@@ -57,7 +38,6 @@ jobs:
           git diff --cached --quiet || git commit -m "更新爬蟲狀態 (539) [skip ci]"
           git pull --rebase origin main
           git push
-
       - name: 今天已確認（僅限自動排程觸發），停用本排程直到明天21:00（屆時會自動重新啟用）
         if: steps.run.outputs.confirmed == 'true' && github.event_name == 'schedule'
         env:
