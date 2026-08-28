@@ -1178,7 +1178,14 @@ def try_cross_check(game_key, conn):
         log(f"  {cfg['name']} - {name}：日期驗證為今天（{today}）"
             f"{f'（此來源日期已 +{offset_days} 天校正時差）' if offset_days else ''}，"
             f"且號碼與資料庫最新一期不同，判定為最新資料，單一來源即可確認")
-        return period, draw_date, numbers, special, [name]
+        # 2026-08-28 修正：draw_date 原本是直接存來源網站的原始字串（例如
+        # 美式 "FRI/AUG 28, 2026"），沒有套用 +N 天時差校正，會跟「這筆
+        # 資料其實是台灣今天才確認」的事實對不起來，造成資料庫看起來
+        # 停在美國那邊的日期。既然這裡已經驗證過 parsed_date（校正時差後）
+        # 等於 today，改成直接存 today 的 ISO 格式（YYYY-MM-DD），確保
+        # draw_date 呈現的是「台灣這邊認定的開獎日期」，跟 checked_at
+        # 的時區基準一致，不同來源、不同格式也都能統一呈現。
+        return period, today.strftime("%Y-%m-%d"), numbers, special, [name]
 
     # 備援路徑：沒有任何單一來源同時通過「日期＋差異」驗證時，退回舊邏輯——
     # REQUIRED_AGREEING_SOURCES 個以上來源號碼彼此一致，也視為確認
@@ -1211,6 +1218,15 @@ def try_cross_check(game_key, conn):
             f"但開獎日期是 {stale_list}，跟今天（{today}）對不起來，"
             f"判定為舊資料快取，本輪不予確認")
         return None
+
+    # 2026-08-28 修正：跟主要路徑一樣，只要上面已經驗證過「至少一個一致來源
+    # （校正時差後）的日期等於今天」，就把 draw_date 換成 today 的 ISO 格式，
+    # 不要繼續存來源網站的原始字串格式（可能是美式、可能沒校正時差）。
+    # 如果所有一致來源都沒提供可辨識日期（parsed_dates 是空的，上面沒被擋下），
+    # 代表無法驗證真正的日期，這時才維持原本「用第一個有值的來源原始字串」
+    # 當備援，不要冒充今天。
+    if parsed_dates:
+        draw_date = today.strftime("%Y-%m-%d")
 
     # 特別號：在號碼一致的來源中，取出現次數最多的特別號值（可能有來源解析不到，忽略 None）
     specials = [s for _, _, _, _, s in agreeing if s is not None]
