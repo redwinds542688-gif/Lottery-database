@@ -1,23 +1,14 @@
 name: 爬蟲 - 香港六合彩
-
 on:
   schedule:
-    # 香港六合彩開獎日不固定（週二、週四固定，週六或週日擇一，依當週
-    # 賽馬日而定），所以不限制星期幾，每天都跑，只限制搜尋時段：
-    # 開獎後 30 分鐘（22:00）開始，每小時一次，
-    # 22:00 / 23:00 / 隔天 00:00，共 3 次嘗試，沒抓到就等明天。
-    # 換算 UTC：每天 14,15,16 點（其中 16 點對應台灣隔天 00:00）。
-    - cron: "0 14,15,16 * * *"
+    - cron: "52 * * * *"
   workflow_dispatch: {}
-
 permissions:
   contents: write
   actions: write
-
 concurrency:
   group: lottery-scraper-marksix
   cancel-in-progress: false
-
 jobs:
   scrape:
     runs-on: ubuntu-latest
@@ -25,15 +16,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Install dependencies
         run: pip install -r requirements.txt
-
       - name: Run scraper
         id: run
         env:
@@ -42,7 +30,6 @@ jobs:
           GITHUB_BRANCH: main
           STATE_DIR: state
         run: python lottery_scraper.py --game marksix
-
       - name: 提交狀態檔案（lottery.db / status.json / source_health.json）
         run: |
           git config user.name "github-actions[bot]"
@@ -51,8 +38,7 @@ jobs:
           git diff --cached --quiet || git commit -m "更新爬蟲狀態 (香港六合彩) [skip ci]"
           git pull --rebase origin main
           git push
-
-      - name: 今天已確認（僅限自動排程觸發），停用本排程直到明天（凌晨會自動重新啟用）
+      - name: 今天已確認（僅限自動排程觸發），停用本排程直到明天21:45（屆時會自動重新啟用）
         if: steps.run.outputs.confirmed == 'true' && github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
