@@ -1,25 +1,14 @@
 name: 爬蟲 - 大樂透
-
 on:
   schedule:
-    # 大樂透平常只有每週二、五晚上 20:30 開獎，但過年期間台灣彩券官方
-    # 會公告「加開」場次，開獎日不一定照平常規律，所以不限制星期幾，
-    # 每天都跑，只限制搜尋時段：開獎後 30 分鐘（21:00）開始，每小時一次，
-    # 21:00 / 22:00 / 23:00 / 隔天 00:00，共 4 次嘗試，沒抓到就等下次開獎。
-    # 平常沒開獎的日子會空跑，但每次只花約 1-2 分鐘，換取過年加開場次
-    # 不會漏抓，划算。
-    # 換算 UTC：每天 13,14,15,16 點（其中 16 點對應台灣隔天 00:00）。
-    - cron: "0 13,14,15,16 * * *"
+    - cron: "37 * * * *"
   workflow_dispatch: {}
-
 permissions:
   contents: write
   actions: write
-
 concurrency:
   group: lottery-scraper-lotto649
   cancel-in-progress: false
-
 jobs:
   scrape:
     runs-on: ubuntu-latest
@@ -27,15 +16,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Install dependencies
         run: pip install -r requirements.txt
-
       - name: Run scraper
         id: run
         env:
@@ -44,7 +30,6 @@ jobs:
           GITHUB_BRANCH: main
           STATE_DIR: state
         run: python lottery_scraper.py --game lotto649
-
       - name: 提交狀態檔案（lottery.db / status.json / source_health.json）
         run: |
           git config user.name "github-actions[bot]"
@@ -53,8 +38,7 @@ jobs:
           git diff --cached --quiet || git commit -m "更新爬蟲狀態 (大樂透) [skip ci]"
           git pull --rebase origin main
           git push
-
-      - name: 今天已確認（僅限自動排程觸發），停用本排程直到明天（凌晨會自動重新啟用）
+      - name: 今天已確認（僅限自動排程觸發），停用本排程直到明天21:30（屆時會自動重新啟用）
         if: steps.run.outputs.confirmed == 'true' && github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
