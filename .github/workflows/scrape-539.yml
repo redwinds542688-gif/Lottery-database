@@ -1,28 +1,45 @@
 name: 爬蟲 - 今彩539
+
 on:
   schedule:
-    - cron: "7 * * * *"
+    # 2026-08-29 改成「單一每日觸發 + 內部長時間重試迴圈」設計：
+    # 原本用「每小時觸發一次」讓 GitHub 負責重試，但實測 GitHub 的
+    # schedule 觸發器對這種高頻率排程並不可靠（實測一天只會觸發 3 次
+    # 左右、間隔 6~7 小時不等，不是設計的每小時一次），導致經常整天都
+    # 抓不到最新開獎號碼。
+    #
+    # 改成一天只在台灣時間 21:00（= UTC 13:00）觸發「一次」，觸發之後
+    # 交給 lottery_scraper.py 內部的重試迴圈自己反覆嘗試，最長可以跑到
+    # 接近 GitHub Actions 單一 job 的執行時間上限（約 6 小時），不再依賴
+    # GitHub 排程器本身的觸發頻率。因此也不再需要「確認後停用排程、
+    # 隔天重新啟用」那一套機制，re-enable-539.yml 已經可以刪除。
+    - cron: "0 13 * * *"
   workflow_dispatch: {}
+
 permissions:
   contents: write
-  actions: write
+
 concurrency:
   group: lottery-scraper-539
   cancel-in-progress: false
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 345
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Run scraper
+
+      - name: Run scraper（內部會重試到確認為止，最長約 5.5 小時）
         id: run
         env:
           GITHUB_REPO: ${{ github.repository }}
@@ -30,6 +47,7 @@ jobs:
           GITHUB_BRANCH: main
           STATE_DIR: state
         run: python lottery_scraper.py --game 539
+
       - name: 提交狀態檔案（lottery.db / status.json / source_health.json）
         run: |
           git config user.name "github-actions[bot]"
@@ -38,8 +56,3 @@ jobs:
           git diff --cached --quiet || git commit -m "更新爬蟲狀態 (539) [skip ci]"
           git pull --rebase origin main
           git push
-      - name: 今天已確認（僅限自動排程觸發），停用本排程直到明天21:00（屆時會自動重新啟用）
-        if: steps.run.outputs.confirmed == 'true' && github.event_name == 'schedule'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow disable "scrape-539.yml"
