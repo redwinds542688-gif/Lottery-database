@@ -60,17 +60,24 @@ HEADERS = {
     )
 }
 
-# 2026-08-27 起改成「單次嘗試」設計：每次執行只抓一輪就結束，不在程式內部
-# 重試等待（原本的 RETRY_INTERVAL_SECONDS / MAX_RETRY_HOURS 迴圈重試機制已移除）。
-# 重試改交給 GitHub Actions 排程「每小時觸發一次」負責，這一輪沒抓到，
-# 下個整點排程會自動再抓一次，直到某次成功為止。
+# 2026-08-29 起改成「單一每日觸發 + 內部長時間重試迴圈」設計：
+# 原本（2026-08-27）的設計是每次執行只抓一輪，重試交給 GitHub Actions
+# 排程「每小時觸發一次」負責。但實測發現 GitHub 的 schedule 觸發器對於
+# 「整天每小時觸發」這種高頻率排程並不可靠——scrape-539.yml /
+# scrape-marksix.yml 實測一天只會觸發 3 次左右、間隔 6~7 小時不等，
+# 完全不是設計的每小時一次，導致經常整天都抓不到最新開獎號碼。
 #
-# 後來（同一天稍晚）又加了一個例外：如果今天是該彩券「常見的開獎日」
-# （見 GAME_CONFIG 的 typical_draw_weekdays），本輪會在這裡設定的時間
-# 上限內反覆重試（而不是只抓 1 次），提高抓到的機會；不是常見開獎日的
-# 話，才維持原本的單次嘗試。
-DRAW_DAY_SEARCH_MINUTES = 5          # 開獎日當天，本輪最多搜尋幾分鐘
-DRAW_DAY_RETRY_INTERVAL_SECONDS = 50  # 開獎日當天，搜尋期間每隔幾秒重試一次
+# 因此改成：GitHub Actions 排程一天只在各彩券的起始時間觸發「一次」
+# （可靠度遠高於高頻排程），觸發之後，這一次執行內部自己用迴圈每隔
+# 固定秒數重試一次，最長持續到下面設定的時間上限為止（GitHub Actions
+# 單一 job 執行時間上限約 360 分鐘，LOOP_MAX_MINUTES 抓在上限之內，
+# 留一些緩衝給環境設置/提交狀態檔案等步驟）。不再依賴 GitHub 排程器
+# 本身的觸發頻率，也因此不再需要「確認後停用排程、隔天重新啟用」這一套
+# gh workflow disable/enable 的機制（re-enable-*.yml 已可移除）。
+LOOP_MAX_MINUTES = 330                    # 常見開獎日當天，本輪最長重試幾分鐘
+LOOP_RETRY_INTERVAL_SECONDS = 5 * 60      # 常見開獎日當天，重試間隔幾秒
+NON_DRAW_DAY_MAX_MINUTES = 20             # 不是常見開獎日時，保險起見（例如特別加開）仍重試的分鐘數上限
+NON_DRAW_DAY_RETRY_INTERVAL_SECONDS = 60  # 不是常見開獎日時，重試間隔幾秒
 REQUIRED_AGREEING_SOURCES = 2     # 備援路徑用：找不到「單一來源日期+差異」確認時，至少要幾個來源一致才算數
 
 # GitHub Actions 執行環境的系統時區預設是 UTC，不是台灣時間。如果直接呼叫
@@ -1266,18 +1273,17 @@ def already_confirmed_today(conn, game):
 
 
 def run_until_confirmed(game_key):
-    """單次嘗試設計（2026-08-27 調整，同一天稍晚再加開獎日例外）：
-    每次執行預設只抓一輪、不在程式內部重試等待。原本的「30 分鐘內每 5 分鐘
-    重試」邏輯，改成交給外層 GitHub Actions 排程「每小時觸發一次」來負責
-    重試——這一輪沒抓到就直接結束，下個整點排程會自動再抓一次。因為前面
-    已經有「今天已經抓取並確認過」的檢查，一旦某次成功，同一天內其餘整點
-    觸發都會在幾秒內直接跳過，不會浪費資源。
+    """單一每日觸發 + 內部長時間重試迴圈設計（2026-08-29 起）：
+    GitHub Actions 排程一天只觸發這支程式「一次」，觸發之後就靠這個函式
+    自己在內部用迴圈反覆重試，不再依賴 GitHub 排程器本身的觸發頻率
+    （實測證實 GitHub 對高頻率 schedule 觸發並不可靠）。
 
-    例外：如果今天是這個彩券「常見的開獎日」（見 GAME_CONFIG 的
-    typical_draw_weekdays），本輪不會只抓 1 次就放棄，而是在
-    DRAW_DAY_SEARCH_MINUTES 分鐘內每隔 DRAW_DAY_RETRY_INTERVAL_SECONDS 秒
-    重試一次，提高抓到的機會；不是常見開獎日（含過年加開這類例外情況）
-    的話，維持原本的單次嘗試，不會比原本更差。"""
+    如果今天是這個彩券「常見的開獎日」（見 GAME_CONFIG 的
+    typical_draw_weekdays），本輪最長重試 LOOP_MAX_MINUTES 分鐘，每隔
+    LOOP_RETRY_INTERVAL_SECONDS 秒重試一次；不是常見開獎日的話（含過年
+    加開這類例外情況），保險起見仍會重試 NON_DRAW_DAY_MAX_MINUTES 分鐘
+    （間隔 NON_DRAW_DAY_RETRY_INTERVAL_SECONDS 秒），而不是只試 1 次
+    ——因為現在一天只有這一次觸發機會，沒有下一個整點排程可以補救。"""
     cfg = GAME_CONFIG[game_key]
     conn = init_db()
 
@@ -1303,22 +1309,29 @@ def run_until_confirmed(game_key):
     is_draw_day = typical_weekdays is None or taiwan_today().weekday() in typical_weekdays
 
     if is_draw_day:
-        log(f"今天可能是 {cfg['name']} 的開獎日，本輪最多搜尋 "
-            f"{DRAW_DAY_SEARCH_MINUTES} 分鐘（每隔 {DRAW_DAY_RETRY_INTERVAL_SECONDS} 秒重試一次）")
-        deadline = time.monotonic() + DRAW_DAY_SEARCH_MINUTES * 60
-        attempt = 0
-        result = None
-        while True:
-            attempt += 1
-            log(f"第 {attempt} 次嘗試...")
-            result = try_cross_check(game_key, conn)
-            if result or time.monotonic() >= deadline:
-                break
-            time.sleep(DRAW_DAY_RETRY_INTERVAL_SECONDS)
+        max_minutes = LOOP_MAX_MINUTES
+        interval_seconds = LOOP_RETRY_INTERVAL_SECONDS
+        log(f"今天是 {cfg['name']} 的開獎日，本輪最長重試 {max_minutes} 分鐘"
+            f"（每隔 {interval_seconds} 秒重試一次）")
     else:
-        log(f"今天不是 {cfg['name']} 的常見開獎日，本輪只嘗試 1 次；"
-            f"若未確認，下個整點排程會自動再抓一次")
+        max_minutes = NON_DRAW_DAY_MAX_MINUTES
+        interval_seconds = NON_DRAW_DAY_RETRY_INTERVAL_SECONDS
+        log(f"今天不是 {cfg['name']} 的常見開獎日，保險起見本輪仍重試 {max_minutes} 分鐘"
+            f"（每隔 {interval_seconds} 秒重試一次），以防特別加開")
+
+    deadline = time.monotonic() + max_minutes * 60
+    attempt = 0
+    result = None
+    while True:
+        attempt += 1
+        log(f"第 {attempt} 次嘗試...")
         result = try_cross_check(game_key, conn)
+        if result:
+            break
+        if time.monotonic() >= deadline:
+            log(f"已達本輪重試時間上限（{max_minutes} 分鐘），本輪停止搜尋")
+            break
+        time.sleep(interval_seconds)
 
     if result:
         period, draw_date, numbers, special, sources = result
@@ -1334,7 +1347,7 @@ def run_until_confirmed(game_key):
         conn.close()
         return True
 
-    log(f"{cfg['name']} 本輪未確認，今日暫不存入資料庫，下個整點排程會自動再抓一次")
+    log(f"{cfg['name']} 本輪未確認，今日暫不存入資料庫，明天同一時間會自動再開始新一輪")
     update_status(game_key, fetching=False)
     conn.close()
     return False
@@ -1348,7 +1361,9 @@ def main():
         action="store_true",
         help="只檢查今天是否已經確認過，不抓取也不寫入任何資料。"
              "exit code 0 代表今天已確認，1 代表尚未確認。"
-             "給「每日重新啟用排程」的 workflow 用，判斷要不要跳過某個彩券。",
+             "2026-08-29 改成單一每日觸發+內部重試迴圈設計後，workflow 已不再需要"
+             "這個旗標（不再有「每日重新啟用排程」的 workflow），保留只是方便手動"
+             "查詢某彩券今天是否已確認過。",
     )
     args = parser.parse_args()
 
@@ -1362,8 +1377,9 @@ def main():
     confirmed = run_until_confirmed(args.game)
 
     # 把「今天是否已確認」寫進 GitHub Actions 的 step output（$GITHUB_OUTPUT），
-    # 讓 workflow yml 可以根據這個結果，決定要不要把「每小時觸發」的排程
-    # 停用到明天（避免今天已經抓到了，還一直每小時空轉觸發）。
+    # 方便 workflow 執行紀錄查看本輪有沒有確認成功。2026-08-29 改成單一每日
+    # 觸發+內部重試迴圈設計後，已不再需要靠這個結果決定要不要停用/啟用排程，
+    # 純粹留著方便查看執行結果。
     # 本機直接執行（不是在 GitHub Actions 環境）時 GITHUB_OUTPUT 不存在，
     # 這段就直接跳過，不影響本機測試。
     github_output_path = os.environ.get("GITHUB_OUTPUT")
