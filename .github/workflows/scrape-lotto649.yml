@@ -1,28 +1,39 @@
 name: 爬蟲 - 大樂透
+
 on:
   schedule:
-    - cron: "37 * * * *"
+    # 2026-08-29 改成「單一每日觸發 + 內部長時間重試迴圈」設計，理由與
+    # scrape-539.yml 相同：GitHub 的高頻率 schedule 觸發不可靠，改成一天
+    # 只在台灣時間 21:30（= UTC 13:30）觸發一次，之後交給
+    # lottery_scraper.py 內部的重試迴圈自己反覆嘗試。re-enable-lotto649.yml
+    # 已經可以刪除。
+    - cron: "30 13 * * *"
   workflow_dispatch: {}
+
 permissions:
   contents: write
-  actions: write
+
 concurrency:
   group: lottery-scraper-lotto649
   cancel-in-progress: false
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 345
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Run scraper
+
+      - name: Run scraper（內部會重試到確認為止，最長約 5.5 小時）
         id: run
         env:
           GITHUB_REPO: ${{ github.repository }}
@@ -30,6 +41,7 @@ jobs:
           GITHUB_BRANCH: main
           STATE_DIR: state
         run: python lottery_scraper.py --game lotto649
+
       - name: 提交狀態檔案（lottery.db / status.json / source_health.json）
         run: |
           git config user.name "github-actions[bot]"
@@ -38,8 +50,3 @@ jobs:
           git diff --cached --quiet || git commit -m "更新爬蟲狀態 (大樂透) [skip ci]"
           git pull --rebase origin main
           git push
-      - name: 今天已確認（僅限自動排程觸發），停用本排程直到明天21:30（屆時會自動重新啟用）
-        if: steps.run.outputs.confirmed == 'true' && github.event_name == 'schedule'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow disable "scrape-lotto649.yml"
