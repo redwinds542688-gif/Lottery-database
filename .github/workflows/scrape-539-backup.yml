@@ -1,0 +1,63 @@
+name: 爬蟲 - 今彩539（備援觸發）
+
+on:
+  schedule:
+    # 2026-08-31 新增：獨立的備援觸發，跟 scrape-539.yml 是完全分開的
+    # workflow 檔案。原因：實測發現就算改成「一天只觸發一次」，GitHub
+    # 的 schedule 觸發器還是可能整個跳過不觸發（不只是延遲）——而且
+    # 觀察到的現象比較像是同一個 workflow 有某種每日觸發次數的隱性節流，
+    # 不是單純每次獨立的機率漏跳（舊版每小時觸發、一天24次機會，結果只
+    # 成功觸發3次左右，間隔還很規律）。用「不同檔名＝不同 workflow」的
+    # 備援觸發，才有機會繞開這個以 workflow 為單位的節流。
+    #
+    # 主要觸發（scrape-539.yml）排定台灣時間 21:00，這裡的備援排在
+    # 30 分鐘後（21:30 = UTC 13:30）。跟主要觸發共用同一個 concurrency
+    # group，所以：
+    #   - 如果主要觸發已經成功confirmed，這次一進去就會看到「今天已確認
+    #     過」直接跳過（幾秒內結束），不會重複抓取或浪費資源。
+    #   - 如果主要觸發根本沒被觸發，這次就是真正的備援機會。
+    #   - 如果主要觸發還在重試中（尚未結束），這次會排隊等主要觸發那次
+    #     跑完才開始，不會同時搶跑。
+    - cron: "30 13 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: lottery-scraper-539
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scraper（備援觸發，內部會重試到確認為止，最長約 5.5 小時）
+        id: run
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_BRANCH: main
+          STATE_DIR: state
+        run: python lottery_scraper.py --game 539
+
+      - name: 提交狀態檔案（lottery.db / status.json / source_health.json）
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/
+          git diff --cached --quiet || git commit -m "更新爬蟲狀態 (539，備援觸發) [skip ci]"
+          git pull --rebase origin main
+          git push
