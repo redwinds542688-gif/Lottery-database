@@ -1,19 +1,19 @@
 {
   "539": {
     "台彩官方API": {
-      "first_fail_date": null,
+      "first_fail_date": "2026-09-01",
       "disabled": false,
       "last_success_date": "2026-08-31"
     },
     "i539.tw": {
       "first_fail_date": null,
       "disabled": false,
-      "last_success_date": "2026-08-31"
+      "last_success_date": "2026-09-01"
     },
     "奧索樂透網": {
       "first_fail_date": null,
       "disabled": false,
-      "last_success_date": "2026-08-31"
+      "last_success_date": "2026-09-01"
     },
     "pilio.idv.tw": {
       "first_fail_date": "2026-08-25",
