@@ -520,6 +520,14 @@ def today_weekday_zh():
     return WEEKDAY_ZH[taiwan_today().weekday()]
 
 
+def weekday_zh_for_date(d):
+    """跟 today_weekday_zh() 一樣回傳中文星期幾，但可以指定任意 date 物件。
+    2026-08-31 新增：讓 update_status() 顯示的星期幾能跟著實際的 draw_date
+    走（可能是今天、也可能是補抓的昨天），不要不分青紅皂白一律顯示今天的
+    星期幾。"""
+    return WEEKDAY_ZH[d.weekday()]
+
+
 # ---------------------------------------------------------------------------
 # 來源健康度追蹤：同一個來源連續失敗超過 SOURCE_DISABLE_DAYS 天就自動停用
 # ---------------------------------------------------------------------------
@@ -1130,14 +1138,25 @@ def try_cross_check(game_key, conn):
 
     確認規則（2026-08-26 調整，把「至少 2 個來源一致」放寬成主要用單一來源驗證）：
     - 主要路徑：只要有 1 個來源同時符合
-        1) 開獎日期可辨識，且等於今天
+        1) 開獎日期可辨識，且等於今天或昨天（見下方 2026-08-31 補充說明）
         2) 抓到的號碼跟資料庫裡「最新一筆」（不限日期）不同
       就視為最新一期已確認，不用等其他來源一致。
     - 備援路徑：如果沒有任何單一來源同時通過上述兩項（例如今天還沒開獎、
       或抓到的日期都無法辨識），才退回舊邏輯：只要有 REQUIRED_AGREEING_SOURCES
       個以上來源號碼彼此一致，也視為確認（一樣會做日期新鮮度檢查，避免多個
       來源剛好都回傳同一份過期快取）。
-    """
+
+    2026-08-31 補充：日期新鮮度檢查原本嚴格要求「等於今天」，但實測發現
+    GitHub Actions 的 schedule 觸發器不只可能完全不觸發，還可能延遲好幾個
+    小時才觸發——如果延遲到跨過台灣午夜，程式執行當下 taiwan_today() 算出來
+    的「今天」就已經變成下一天，導致原本該抓的那一期（實際上是「昨天」）
+    永遠找不到日期等於「今天」的資料，白白搜尋 LOOP_MAX_MINUTES 分鐘後放棄，
+    整期漏抓（539 於 2026-08-30 實際發生過這個狀況：排程延遲到 8/31 凌晨
+    1:12 才執行，導致當天整期沒抓到）。
+    修法：日期比對放寬成「今天或昨天」都算通過，這樣即使排程延遲跨夜，
+    也還能正確補抓到「昨天」（也就是原本該抓的那一期）的資料，不會整期
+    漏掉；draw_date 會照實際比對到的日期存（今天就存今天、昨天就存昨天），
+    不會因為补抓而冒充今天的日期。"""
     cfg = GAME_CONFIG[game_key]
     fetched = []
     for name, fn in cfg["sources"]:
@@ -1169,30 +1188,34 @@ def try_cross_check(game_key, conn):
     from datetime import timedelta
 
     today = taiwan_today()
+    yesterday = today - timedelta(days=1)
+    acceptable_dates = (today, yesterday)  # 見函式說明：容許補抓「昨天」，避免排程延遲跨夜整期漏抓
     source_offsets = cfg.get("source_date_offset_days", {})
     latest_numbers = get_latest_numbers(conn, cfg["name"])
 
-    # 主要路徑：單一來源即可確認 —— 日期是今天，且號碼跟資料庫最新一期不同
+    # 主要路徑：單一來源即可確認 —— 日期是今天或昨天，且號碼跟資料庫最新一期不同
     for name, period, draw_date, numbers, special in fetched:
         offset_days = source_offsets.get(name, 0)
         parsed_date = normalize_draw_date(draw_date)
         if parsed_date is not None and offset_days:
             parsed_date = parsed_date + timedelta(days=offset_days)
-        if parsed_date != today:
-            continue  # 日期無法辨識，或（校正時差後）不是今天，跳過這個來源
+        if parsed_date not in acceptable_dates:
+            continue  # 日期無法辨識，或（校正時差後）不是今天也不是昨天，跳過這個來源
         if latest_numbers is not None and numbers == latest_numbers:
             continue  # 跟資料庫最新一期一樣，可能是舊資料快取，跳過這個來源
-        log(f"  {cfg['name']} - {name}：日期驗證為今天（{today}）"
+        which = "今天" if parsed_date == today else "昨天（可能是排程延遲跨夜，補抓漏掉的一期）"
+        log(f"  {cfg['name']} - {name}：日期驗證為{which}（{parsed_date}）"
             f"{f'（此來源日期已 +{offset_days} 天校正時差）' if offset_days else ''}，"
             f"且號碼與資料庫最新一期不同，判定為最新資料，單一來源即可確認")
         # 2026-08-28 修正：draw_date 原本是直接存來源網站的原始字串（例如
         # 美式 "FRI/AUG 28, 2026"），沒有套用 +N 天時差校正，會跟「這筆
-        # 資料其實是台灣今天才確認」的事實對不起來，造成資料庫看起來
-        # 停在美國那邊的日期。既然這裡已經驗證過 parsed_date（校正時差後）
-        # 等於 today，改成直接存 today 的 ISO 格式（YYYY-MM-DD），確保
-        # draw_date 呈現的是「台灣這邊認定的開獎日期」，跟 checked_at
-        # 的時區基準一致，不同來源、不同格式也都能統一呈現。
-        return period, today.strftime("%Y-%m-%d"), numbers, special, [name]
+        # 資料其實是台灣這邊確認」的事實對不起來，造成資料庫看起來停在
+        # 美國那邊的日期。既然這裡已經驗證過 parsed_date（校正時差後）
+        # 等於 today 或 yesterday，改成直接存 parsed_date 本身的 ISO 格式
+        # （YYYY-MM-DD，2026-08-31 起不再固定寫死 today，因為補抓昨天的
+        # 情況要存昨天的日期，不能冒充今天），確保 draw_date 呈現的是
+        # 「台灣這邊認定的實際開獎日期」，不同來源、不同格式也都能統一呈現。
+        return period, parsed_date.strftime("%Y-%m-%d"), numbers, special, [name]
 
     # 備援路徑：沒有任何單一來源同時通過「日期＋差異」驗證時，退回舊邏輯——
     # REQUIRED_AGREEING_SOURCES 個以上來源號碼彼此一致，也視為確認
@@ -1208,7 +1231,9 @@ def try_cross_check(game_key, conn):
 
     # 日期新鮮度檢查：避免多個來源剛好都回傳「同一份過期快取」被誤判為交叉確認成功。
     # 每個來源各自套用自己的時差校正（同一組一致來源裡，可能有的來源要
-    # +1 天、有的不用），再看有沒有任一個校正後對得上今天。
+    # +1 天、有的不用），再看有沒有任一個校正後對得上今天或昨天（2026-08-31
+    # 起放寬，理由同主要路徑：排程可能延遲跨夜執行，「今天」的判斷基準
+    # 會跟著往後移一天，改成「今天或昨天」才不會把該補抓的一期誤判成舊快取）。
     # 只有在至少一個一致來源提供了「可辨識」的日期時才檢查；若都無法辨識日期，
     # 代表這些來源本來就不提供日期資訊，不因此擋下確認（維持原本行為，避免卡死）。
     parsed_dates = []
@@ -1219,21 +1244,24 @@ def try_cross_check(game_key, conn):
             if offset_days:
                 parsed = parsed + timedelta(days=offset_days)
             parsed_dates.append(parsed)
-    if parsed_dates and today not in parsed_dates:
+    matched_dates = [d for d in parsed_dates if d in acceptable_dates]
+    if parsed_dates and not matched_dates:
         stale_list = ", ".join(sorted({d.strftime("%Y-%m-%d") for d in parsed_dates}))
         log(f"  {cfg['name']}：{len(agreeing)} 個來源號碼一致，"
-            f"但開獎日期是 {stale_list}，跟今天（{today}）對不起來，"
+            f"但開獎日期是 {stale_list}，跟今天或昨天（{yesterday} ~ {today}）都對不起來，"
             f"判定為舊資料快取，本輪不予確認")
         return None
 
-    # 2026-08-28 修正：跟主要路徑一樣，只要上面已經驗證過「至少一個一致來源
-    # （校正時差後）的日期等於今天」，就把 draw_date 換成 today 的 ISO 格式，
-    # 不要繼續存來源網站的原始字串格式（可能是美式、可能沒校正時差）。
+    # 2026-08-28 修正、2026-08-31 再調整：跟主要路徑一樣，只要上面已經驗證過
+    # 「至少一個一致來源（校正時差後）的日期等於今天或昨天」，就把 draw_date
+    # 換成實際比對到的那個日期的 ISO 格式（有今天優先用今天，避免補抓昨天跟
+    # 今天混在一起時取到舊的），不要繼續存來源網站的原始字串格式（可能是
+    # 美式、可能沒校正時差），也不要不分青紅皂白一律寫死 today。
     # 如果所有一致來源都沒提供可辨識日期（parsed_dates 是空的，上面沒被擋下），
     # 代表無法驗證真正的日期，這時才維持原本「用第一個有值的來源原始字串」
     # 當備援，不要冒充今天。
-    if parsed_dates:
-        draw_date = today.strftime("%Y-%m-%d")
+    if matched_dates:
+        draw_date = max(matched_dates).strftime("%Y-%m-%d")
 
     # 特別號：在號碼一致的來源中，取出現次數最多的特別號值（可能有來源解析不到，忽略 None）
     specials = [s for _, _, _, _, s in agreeing if s is not None]
@@ -1263,7 +1291,7 @@ def already_confirmed_today(conn, game):
     today = taiwan_today().strftime("%Y-%m-%d")
     row = conn.execute(
         """
-        SELECT id, numbers, special_number, checked_at FROM draws
+        SELECT id, numbers, special_number, checked_at, draw_date FROM draws
         WHERE game = ? AND date(checked_at) = ?
         ORDER BY id DESC LIMIT 1
         """,
@@ -1289,14 +1317,18 @@ def run_until_confirmed(game_key):
 
     existing = already_confirmed_today(conn, cfg["name"])
     if existing:
-        _, existing_numbers, existing_special, existing_checked_at = existing
+        _, existing_numbers, existing_special, existing_checked_at, existing_draw_date = existing
         log(f"{cfg['name']} 今天已經抓取並確認過（號碼：{existing_numbers}，時間：{existing_checked_at}），"
             f"不再重複抓取，明天會自動再開始新一輪")
+        # 2026-08-31 修正：這裡的 date/weekday 改用實際存的 draw_date（可能是
+        # 補抓昨天那期），不要一律顯示 taiwan_today()，否則會跟資料本身的
+        # 日期對不起來。draw_date 解析失敗（例如舊資料格式）時才退回今天。
+        existing_date_obj = normalize_draw_date(existing_draw_date) or taiwan_today()
         update_status(
             game_key,
             fetching=False,
-            date=taiwan_today().strftime("%Y-%m-%d"),
-            weekday=today_weekday_zh(),
+            date=existing_date_obj.strftime("%Y-%m-%d"),
+            weekday=weekday_zh_for_date(existing_date_obj),
             numbers=[int(n) for n in existing_numbers.split()],
             special=int(existing_special) if existing_special else None,
         )
@@ -1336,11 +1368,14 @@ def run_until_confirmed(game_key):
     if result:
         period, draw_date, numbers, special, sources = result
         save_confirmed(conn, cfg["name"], period, draw_date, numbers, special, sources)
+        # 2026-08-31 修正：這裡也改用剛剛確認到的 draw_date（try_cross_check
+        # 現在可能回傳「今天」或「昨天」），不要一律寫死 taiwan_today()。
+        result_date_obj = normalize_draw_date(draw_date) or taiwan_today()
         update_status(
             game_key,
             fetching=False,
-            date=taiwan_today().strftime("%Y-%m-%d"),
-            weekday=today_weekday_zh(),
+            date=result_date_obj.strftime("%Y-%m-%d"),
+            weekday=weekday_zh_for_date(result_date_obj),
             numbers=list(numbers),
             special=special,
         )
