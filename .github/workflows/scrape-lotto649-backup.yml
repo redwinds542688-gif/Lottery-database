@@ -1,0 +1,53 @@
+name: 爬蟲 - 大樂透（備援觸發）
+
+on:
+  schedule:
+    # 2026-08-31 新增：獨立的備援觸發，理由跟 scrape-539-backup.yml 相同
+    # ——防範 GitHub 對同一個 workflow 的排程觸發做隱性節流，用不同檔名
+    # 的獨立 workflow 增加至少一次成功觸發的機會。
+    # 主要觸發（scrape-lotto649.yml）排定台灣時間 21:30，這裡排在
+    # 30 分鐘後（22:00 = UTC 14:00）。共用同一個 concurrency group，
+    # 已確認過就直接跳過、沒觸發過才是真正的備援機會、還在跑就排隊等。
+    - cron: "0 14 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: lottery-scraper-lotto649
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scraper（備援觸發，內部會重試到確認為止，最長約 5.5 小時）
+        id: run
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_BRANCH: main
+          STATE_DIR: state
+        run: python lottery_scraper.py --game lotto649
+
+      - name: 提交狀態檔案（lottery.db / status.json / source_health.json）
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/
+          git diff --cached --quiet || git commit -m "更新爬蟲狀態 (大樂透，備援觸發) [skip ci]"
+          git pull --rebase origin main
+          git push
