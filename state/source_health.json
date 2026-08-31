@@ -87,12 +87,12 @@
     "加州彩券官網": {
       "first_fail_date": null,
       "disabled": false,
-      "last_success_date": "2026-08-30"
+      "last_success_date": "2026-08-31"
     },
     "lotteryusa.com": {
       "first_fail_date": null,
       "disabled": false,
-      "last_success_date": "2026-08-30"
+      "last_success_date": "2026-08-31"
     },
     "lottery.net": {
       "first_fail_date": "2026-08-25",
@@ -102,7 +102,7 @@
     "lotto-8.com": {
       "first_fail_date": null,
       "disabled": false,
-      "last_success_date": "2026-08-30"
+      "last_success_date": "2026-08-31"
     },
     "twlottery.in": {
       "first_fail_date": "2026-08-25",
@@ -117,7 +117,7 @@
     "lotteryextreme.com": {
       "first_fail_date": null,
       "disabled": false,
-      "last_success_date": "2026-08-30"
+      "last_success_date": "2026-08-31"
     },
     "Google新聞搜尋": {
       "first_fail_date": "2026-08-25",
