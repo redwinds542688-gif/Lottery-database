@@ -1303,12 +1303,21 @@ def get_latest_numbers(conn, game):
 
 
 def already_confirmed_today(conn, game):
-    """檢查該遊戲今天是否已經有確認成功的紀錄，避免重複抓取。"""
+    """檢查該遊戲「今天這一期」是否已經有確認成功的紀錄，避免重複抓取。
+
+    2026-09-01 修正：原本是用「存入時間 checked_at 的日期 = 今天」來判斷，
+    但自從允許補抓「昨天」的資料之後，會出現這種狀況：GitHub 排程延遲到
+    凌晨 3 點才跑，補抓到的是「昨天」那期、卻在「今天」存入 → checked_at
+    是今天 → 晚上真正的排程一進來就看到「今天已確認過」直接跳過，結果
+    今天真正的開獎反而沒抓（539 於 2026-09-01 實際發生）。
+    改成用「開獎日期 draw_date = 今天」判斷，才是真正的「今天這一期抓過
+    了沒」。draw_date 自 2026-08-28 起統一存 YYYY-MM-DD，用 substr 取前 10
+    碼是為了相容更早以前存成 "2026-08-25T00:00:00" 這種格式的舊資料。"""
     today = taiwan_today().strftime("%Y-%m-%d")
     row = conn.execute(
         """
         SELECT id, numbers, special_number, checked_at, draw_date FROM draws
-        WHERE game = ? AND date(checked_at) = ?
+        WHERE game = ? AND substr(draw_date, 1, 10) = ?
         ORDER BY id DESC LIMIT 1
         """,
         (game, today),
