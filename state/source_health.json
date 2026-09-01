@@ -43,7 +43,7 @@
   },
   "lotto649": {
     "台彩官方API": {
-      "first_fail_date": null,
+      "first_fail_date": "2026-09-01",
       "disabled": false,
       "last_success_date": "2026-08-31"
     },
@@ -75,7 +75,7 @@
     "9800.com.tw": {
       "first_fail_date": null,
       "disabled": false,
-      "last_success_date": "2026-08-31"
+      "last_success_date": "2026-09-01"
     },
     "Google新聞搜尋": {
       "first_fail_date": "2026-08-25",
