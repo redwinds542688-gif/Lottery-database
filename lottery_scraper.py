@@ -1123,6 +1123,14 @@ GAME_CONFIG = {
             "加州彩券官網": 1,
             "lottery.net": 1,
             "lotteryextreme.com": 1,
+            # 2026-09-01 新增：從 8/31、9/1 兩天的實際執行紀錄看，lotto-8.com
+            # 標示的也是美國當地日期（跟加州官網一樣，比台灣這邊認定的日期
+            # 少一天），所以一樣要 +1 天校正。之前沒校正時，它會因為日期
+            # 對不上「今天」而被跳過、改由 lotteryextreme.com 配對成功，看起來
+            # 沒事；但 8/31 放寬成「今天或昨天」都可接受之後，它標的美國日期
+            # 剛好等於「昨天」、又排在 lotteryextreme.com 前面，就先被採用，
+            # 造成 9/1 這天抓到的號碼被存成 8/31（實際發生過）。
+            "lotto-8.com": 1,
         },
     },
     # 大樂透平常只有週二（1）、週五（4）開獎
@@ -1193,29 +1201,37 @@ def try_cross_check(game_key, conn):
     source_offsets = cfg.get("source_date_offset_days", {})
     latest_numbers = get_latest_numbers(conn, cfg["name"])
 
-    # 主要路徑：單一來源即可確認 —— 日期是今天或昨天，且號碼跟資料庫最新一期不同
-    for name, period, draw_date, numbers, special in fetched:
-        offset_days = source_offsets.get(name, 0)
-        parsed_date = normalize_draw_date(draw_date)
-        if parsed_date is not None and offset_days:
-            parsed_date = parsed_date + timedelta(days=offset_days)
-        if parsed_date not in acceptable_dates:
-            continue  # 日期無法辨識，或（校正時差後）不是今天也不是昨天，跳過這個來源
-        if latest_numbers is not None and numbers == latest_numbers:
-            continue  # 跟資料庫最新一期一樣，可能是舊資料快取，跳過這個來源
-        which = "今天" if parsed_date == today else "昨天（可能是排程延遲跨夜，補抓漏掉的一期）"
-        log(f"  {cfg['name']} - {name}：日期驗證為{which}（{parsed_date}）"
-            f"{f'（此來源日期已 +{offset_days} 天校正時差）' if offset_days else ''}，"
-            f"且號碼與資料庫最新一期不同，判定為最新資料，單一來源即可確認")
-        # 2026-08-28 修正：draw_date 原本是直接存來源網站的原始字串（例如
-        # 美式 "FRI/AUG 28, 2026"），沒有套用 +N 天時差校正，會跟「這筆
-        # 資料其實是台灣這邊確認」的事實對不起來，造成資料庫看起來停在
-        # 美國那邊的日期。既然這裡已經驗證過 parsed_date（校正時差後）
-        # 等於 today 或 yesterday，改成直接存 parsed_date 本身的 ISO 格式
-        # （YYYY-MM-DD，2026-08-31 起不再固定寫死 today，因為補抓昨天的
-        # 情況要存昨天的日期，不能冒充今天），確保 draw_date 呈現的是
-        # 「台灣這邊認定的實際開獎日期」，不同來源、不同格式也都能統一呈現。
-        return period, parsed_date.strftime("%Y-%m-%d"), numbers, special, [name]
+    # 主要路徑：單一來源即可確認 —— 日期是今天（或昨天），且號碼跟資料庫最新一期不同
+    #
+    # 2026-09-01 修正：改成「兩輪」比對——第一輪只接受日期等於今天的來源，
+    # 全部來源都對不上今天時，第二輪才接受等於昨天的來源。原本一輪就同時
+    # 接受今天或昨天，結果被一個「時差校正設定不正確、標的是美國日期」的
+    # 來源（lotto-8.com）搶先配對成「昨天」，把 9/1 抓到的號碼存成 8/31。
+    # 分成兩輪之後，只要有任何一個來源正確對上今天，就一定優先採用它，
+    # 「昨天」只在真的沒有今天資料時（例如排程延遲跨夜）才會被用到。
+    for target_date in acceptable_dates:  # 先 today、再 yesterday
+        for name, period, draw_date, numbers, special in fetched:
+            offset_days = source_offsets.get(name, 0)
+            parsed_date = normalize_draw_date(draw_date)
+            if parsed_date is not None and offset_days:
+                parsed_date = parsed_date + timedelta(days=offset_days)
+            if parsed_date != target_date:
+                continue  # 日期無法辨識，或（校正時差後）不是這一輪要找的日期，跳過
+            if latest_numbers is not None and numbers == latest_numbers:
+                continue  # 跟資料庫最新一期一樣，可能是舊資料快取，跳過這個來源
+            which = "今天" if parsed_date == today else "昨天（可能是排程延遲跨夜，補抓漏掉的一期）"
+            log(f"  {cfg['name']} - {name}：日期驗證為{which}（{parsed_date}）"
+                f"{f'（此來源日期已 +{offset_days} 天校正時差）' if offset_days else ''}，"
+                f"且號碼與資料庫最新一期不同，判定為最新資料，單一來源即可確認")
+            # 2026-08-28 修正：draw_date 原本是直接存來源網站的原始字串（例如
+            # 美式 "FRI/AUG 28, 2026"），沒有套用 +N 天時差校正，會跟「這筆
+            # 資料其實是台灣這邊確認」的事實對不起來，造成資料庫看起來停在
+            # 美國那邊的日期。既然這裡已經驗證過 parsed_date（校正時差後）
+            # 等於 today 或 yesterday，改成直接存 parsed_date 本身的 ISO 格式
+            # （YYYY-MM-DD，2026-08-31 起不再固定寫死 today，因為補抓昨天的
+            # 情況要存昨天的日期，不能冒充今天），確保 draw_date 呈現的是
+            # 「台灣這邊認定的實際開獎日期」，不同來源、不同格式也都能統一呈現。
+            return period, parsed_date.strftime("%Y-%m-%d"), numbers, special, [name]
 
     # 備援路徑：沒有任何單一來源同時通過「日期＋差異」驗證時，退回舊邏輯——
     # REQUIRED_AGREEING_SOURCES 個以上來源號碼彼此一致，也視為確認
