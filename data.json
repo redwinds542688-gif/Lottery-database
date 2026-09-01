@@ -5165,6 +5165,14 @@
   ],
   "大樂透": [
     {
+      "period": "",
+      "draw_date": "2026-09-01",
+      "numbers": "10 16 19 26 29 48",
+      "special_number": "30",
+      "agreeing_sources": "9800.com.tw",
+      "checked_at": "2026-09-01 20:51:19"
+    },
+    {
       "period": "115000083",
       "draw_date": "2026-08-28",
       "numbers": "9 20 23 26 36 44",
