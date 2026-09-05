@@ -1241,6 +1241,21 @@ def try_cross_check(game_key, conn):
         log("  沒有來源同時通過「日期＋資料差異」驗證，也沒有足夠來源號碼一致，本輪無法確認")
         return None
 
+    # 2026-09-05 修正：備援路徑補上「號碼必須跟資料庫最新一筆不同」的檢查
+    # （主要路徑從一開始就有這條，備援路徑漏了）。實際案例：2026-09-05 晚上
+    # 21:00 執行時，來源網站都還掛著 9/4 的號碼，台彩官方API＋奧索樂透網
+    # 兩個來源「號碼一致」，日期 9/4 又剛好符合「今天或昨天」的新鮮度放寬
+    # 條件，備援路徑就把昨天的號碼當成新開獎「確認」、20 秒收工，330 分鐘
+    # 重試迴圈完全沒機會發揮，當晚真正的開獎號碼反而沒抓到（最後靠使用者
+    # 手動再觸發一次才補到）。半夜被 GitHub 延遲觸發的排程 20~30 秒就結束，
+    # 也是同一個原因。加上這個檢查後，一致的號碼如果跟資料庫最新一筆相同，
+    # 一律視為「來源網站還沒更新最新一期」，本輪不予確認，交給重試迴圈
+    # 繼續等新號碼出現。
+    if latest_numbers is not None and best_numbers == latest_numbers:
+        log(f"  {cfg['name']}：{count} 個來源號碼一致，但跟資料庫最新一筆完全相同，"
+            f"應是來源網站尚未更新最新一期，視為舊資料，本輪不予確認、繼續重試")
+        return None
+
     agreeing = [item for item in fetched if item[3] == best_numbers]
     period = next((p for _, p, _, _, _ in agreeing if p), "")
     draw_date = next((d for _, _, d, _, _ in agreeing if d), "")
