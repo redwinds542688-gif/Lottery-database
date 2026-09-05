@@ -2,12 +2,16 @@ name: 爬蟲 - 加州天天樂
 
 on:
   schedule:
-    # 2026-08-29 改成「單一每日觸發 + 內部長時間重試迴圈」設計，理由與
-    # scrape-539.yml 相同：GitHub 的高頻率 schedule 觸發不可靠，改成一天
-    # 只在台灣時間 11:15（= UTC 03:15）觸發一次，之後交給
-    # lottery_scraper.py 內部的重試迴圈自己反覆嘗試。re-enable-fantasy5.yml
-    # 已經可以刪除。
-    - cron: "15 3 * * *"
+    # 2026-09-05 調整：比照 scrape-539.yml，從「一天只在台灣 11:15（UTC 03:15）觸發
+    # 一次」改成「10:15 主觸發 + 12:45 備援觸發」兩個時間點。
+    # 原因與對策詳見 scrape-539.yml 的說明：GitHub schedule 實測常延遲
+    # 3~4 小時以上，單次觸發延遲一跨夜就整期漏抓。主觸發提前約 1 小時
+    # （加州天天樂美西晚間開獎，換算台灣約上午公布），靠 lottery_scraper.py 內部最長 330 分鐘的重試迴圈等結果
+    # 公布；備援觸發防主觸發被整個跳過，若已確認會在幾秒內被
+    # 「今天這期已確認」檢查擋下，幾乎不耗資源。兩個觸發共用 concurrency
+    # group，不會同時重複執行。
+    - cron: "15 2 * * *"
+    - cron: "45 4 * * *"
   workflow_dispatch: {}
 
 permissions:
@@ -47,6 +51,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add state/
-          git diff --cached --quiet || git commit -m "更新爬蟲狀態 (加州天天樂) [skip ci]"
+          git diff --cached --quiet || git commit -m "更新爬蟲狀態 (fantasy5) [skip ci]"
           git pull --rebase origin main
           git push
