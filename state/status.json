@@ -44,17 +44,17 @@
   },
   "marksix": {
     "fetching": false,
-    "updated_at": "2026-09-10 03:17:26",
-    "date": "2026-09-08",
-    "weekday": "二",
+    "updated_at": "2026-09-10 22:16:15",
+    "date": "2026-09-10",
+    "weekday": "四",
     "numbers": [
-      9,
+      22,
       23,
-      28,
-      29,
+      31,
+      32,
       35,
-      41
+      45
     ],
-    "special": 38
+    "special": 34
   }
 }
