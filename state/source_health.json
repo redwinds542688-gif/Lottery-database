@@ -78,9 +78,9 @@
       "last_success_date": "2026-09-11"
     },
     "Google新聞搜尋": {
-      "first_fail_date": "2026-08-25",
+      "first_fail_date": null,
       "disabled": false,
-      "last_success_date": null
+      "last_success_date": "2026-09-11"
     }
   },
   "fantasy5": {
