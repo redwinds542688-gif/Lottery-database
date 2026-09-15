@@ -5383,6 +5383,14 @@
     {
       "period": "",
       "draw_date": "2026-09-15",
+      "numbers": "1 7 9 9 15 15",
+      "special_number": "1",
+      "agreeing_sources": "Google新聞搜尋",
+      "checked_at": "2026-09-16 02:00:34"
+    },
+    {
+      "period": "",
+      "draw_date": "2026-09-15",
       "numbers": "2 3 18 21 22 39",
       "special_number": "7",
       "agreeing_sources": "9800.com.tw",
