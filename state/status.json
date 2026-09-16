@@ -30,15 +30,15 @@
   },
   "fantasy5": {
     "fetching": false,
-    "updated_at": "2026-09-15 17:36:26",
-    "date": "2026-09-15",
-    "weekday": "二",
+    "updated_at": "2026-09-16 11:15:27",
+    "date": "2026-09-16",
+    "weekday": "三",
     "numbers": [
-      3,
       4,
-      16,
-      30,
-      38
+      5,
+      24,
+      32,
+      33
     ],
     "special": null
   },
