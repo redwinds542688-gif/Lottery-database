@@ -5422,6 +5422,14 @@
   "大樂透": [
     {
       "period": "",
+      "draw_date": "2026-09-18",
+      "numbers": "1 6 14 21 31 35",
+      "special_number": "16",
+      "agreeing_sources": "9800.com.tw",
+      "checked_at": "2026-09-18 21:30:45"
+    },
+    {
+      "period": "",
       "draw_date": "2026-09-15",
       "numbers": "2 3 18 21 22 39",
       "special_number": "7",
