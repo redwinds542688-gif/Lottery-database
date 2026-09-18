@@ -189,6 +189,14 @@ def upload_to_cloud(game, period, draw_date, numbers, special, sources):
     for attempt in range(1, GITHUB_UPLOAD_MAX_RETRIES + 1):
         try:
             data, sha = _github_fetch_data()
+
+            # 2026-09-17：上傳前先把整份 data.json 裡不合號碼規則的舊紀錄
+            # 清掉（自我修復，詳見 clean_invalid_records 的說明）
+            removed = clean_invalid_records(data)
+            for _game_name, _rec in removed:
+                log(f"清除 data.json 壞資料：{_game_name} {_rec.get('draw_date')} "
+                    f"{_rec.get('numbers')}（來源：{_rec.get('agreeing_sources')}）")
+
             game_records = data.setdefault(game, [])
 
             # 跟 Railway 版本一樣的去重規則：同一期別+同一組號碼就不重複加入
@@ -1141,6 +1149,113 @@ GAME_CONFIG = {
 # ---------------------------------------------------------------------------
 # 交叉比對邏輯
 # ---------------------------------------------------------------------------
+# 2026-09-17 新增：號碼合理性檢查。
+# 起因：2026-09-16 凌晨 2:00（排程被延遲的那一輪）大樂透被「Google新聞搜尋」
+# 的誤判資料確認成功，寫進 data.json 一筆「1 7 9 9 15 15」——號碼重複、
+# 明顯是從新聞內文誤抓的。原本的防線只檢查「號碼跟資料庫最新一筆不同」，
+# 擋得住「舊資料重播」卻擋不住「亂數垃圾」。這裡補上最後一道閘門：
+# 不管哪個來源、哪條確認路徑，號碼本身必須符合該彩券的基本規則
+# （個數正確、全是整數、範圍內、不重複），不合格的來源資料直接丟棄，
+# 連參與比對的資格都沒有。
+NUMBER_RULES = {
+    # game_key / data.json 中文名稱 都能查到：(號碼個數, 最小值, 最大值)
+    "539": (5, 1, 39), "今彩539": (5, 1, 39),
+    "fantasy5": (5, 1, 39), "加州天天樂": (5, 1, 39),
+    "lotto649": (6, 1, 49), "大樂透": (6, 1, 49),
+    "marksix": (6, 1, 49), "香港六合彩": (6, 1, 49),
+}
+
+
+def validate_numbers(game_key_or_name, numbers):
+    """檢查一組號碼是否符合該彩券的基本規則。
+
+    numbers 可以是 list（元素 int 或 str）或以空白分隔的字串。
+    回傳 (True, "") 或 (False, 原因)。查不到規則的彩券一律放行，
+    避免日後新增彩券忘了加規則反而整個抓不到。"""
+    rule = NUMBER_RULES.get(game_key_or_name)
+    if rule is None:
+        return True, ""
+    count, lo, hi = rule
+    if isinstance(numbers, str):
+        parts = numbers.split()
+    else:
+        parts = list(numbers)
+    try:
+        values = [int(str(p)) for p in parts]
+    except (TypeError, ValueError):
+        return False, f"含非數字內容：{numbers}"
+    if len(values) != count:
+        return False, f"號碼個數 {len(values)} 不等於 {count}"
+    if len(set(values)) != len(values):
+        return False, "號碼有重複"
+    if any(v < lo or v > hi for v in values):
+        return False, f"有號碼超出 {lo}~{hi} 範圍"
+    return True, ""
+
+
+def clean_invalid_records(data):
+    """上傳前對整份 data.json 做自我修復（2026-09-17 新增，同日擴充）：
+
+    1. 剔除號碼不合規則的紀錄（validate_numbers 不通過者），
+       實例：大樂透 2026-09-15 被 Google新聞搜尋 誤判寫入的「1 7 9 9 15 15」。
+    2. 日期格式正規化成 YYYY-MM-DD。8 月中以前的老紀錄混了三種格式：
+       「2026/08/27」「2026-08-25T00:00:00」「THU/AUG 28, 2026」，
+       雖然 App 都顯示得出來，但格式統一後比對、排序、除錯都單純得多。
+       無法辨識的格式維持原樣，寧可留著也不破壞資料。
+    3. 正規化後若出現「同日期＋同一組號碼」的重複紀錄就只留一筆，
+       實例：今彩539 的 2026-08-25 因為一筆存成 T00:00:00 格式、
+       一筆存成純日期，同一期被存了兩筆。
+       比對號碼時會先把「09」和「9」視為相同再比。
+
+    與其要使用者手動編輯幾百 KB 的 data.json，不如每次上傳前自動掃一遍：
+    下一次任何彩券確認成功要上傳時，整份檔案就會順帶被清乾淨。
+    回傳被移除的 (彩券名, 紀錄) 清單，呼叫端會逐筆寫進 log。"""
+    import re as _re
+
+    _month_abbr = {"JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+                   "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12}
+
+    def _norm_date(raw):
+        t = str(raw).strip()
+        m = _re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})", t)
+        if m:
+            return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+        m = _re.match(r"^[A-Za-z]{3}/([A-Za-z]{3})\.?\s*(\d{1,2}),?\s*(\d{4})$", t)
+        if m and m.group(1).upper() in _month_abbr:
+            return f"{int(m.group(3)):04d}-{_month_abbr[m.group(1).upper()]:02d}-{int(m.group(2)):02d}"
+        return None  # 認不得的格式：不動它
+
+    def _norm_numbers_key(numbers):
+        try:
+            return " ".join(str(int(x)) for x in str(numbers).split())
+        except (TypeError, ValueError):
+            return str(numbers)
+
+    removed = []
+    for game_name, records in list(data.items()):
+        if not isinstance(records, list):
+            continue
+        kept = []
+        seen = set()
+        for rec in records:
+            ok, _reason = validate_numbers(game_name, rec.get("numbers", ""))
+            if not ok:
+                removed.append((game_name, rec))
+                continue
+            nd = _norm_date(rec.get("draw_date", ""))
+            if nd:
+                rec["draw_date"] = nd
+            key = (rec.get("draw_date"), _norm_numbers_key(rec.get("numbers", "")))
+            if key in seen:
+                removed.append((game_name, rec))
+                continue
+            seen.add(key)
+            kept.append(rec)
+        if len(kept) != len(records):
+            data[game_name] = kept
+    return removed
+
+
 def try_cross_check(game_key, conn):
     """呼叫該遊戲所有「未被停用」的來源，回傳 (period, draw_date, numbers, special, agreeing_source_names) 或 None。
 
@@ -1173,6 +1288,13 @@ def try_cross_check(game_key, conn):
         try:
             period, draw_date, numbers, special = fn()
             if numbers:
+                # 2026-09-17：號碼不合理（個數錯/重複/超範圍/非數字）的來源
+                # 資料直接丟棄並記成該來源一次失敗，不讓它參與任何確認路徑
+                ok, reason = validate_numbers(game_key, numbers)
+                if not ok:
+                    log(f"  {cfg['name']} - {name} 抓到的號碼不合理（{reason}），丟棄：{numbers}")
+                    record_source_result(game_key, name, success=False)
+                    continue
                 fetched.append((name, period, draw_date, numbers, special))
                 log(f"  {cfg['name']} - {name}：{numbers}"
                     f"{'（特別號 ' + str(special) + '）' if special is not None else ''}")
